@@ -1848,12 +1848,19 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    分派失败。提前返回变体接受 verified plugin 的借用 Ref；使用 Runtime 发放的
    可观测探针 Ref 时确认后续 Slot 被跳过。失败变体在宿主 Runtime 中配对激活精确的
    verified owner 与 consumer；该 Runtime 销毁后，探针 Ref 触发执行失败，同一 Ref
-   随后两次全新调用成功。由 verified plugin generation 触发的失败和拥有型转移
-   尚不在此私有证明内。合法源码 Fragment 不能产生重复 resume 失败：Sema 与
+   随后两次全新调用成功。另一个直接 Runtime 分派现于宿主 Runtime 销毁后执行
+   独立验证的 Moon plugin generation：合法的单次 resume 传播注入的 base
+   continuation 失败，随后两次全新分派成功，discard 路径跳过 base 续体。
+   这证明已验证插件的 pin 和失败路径；使用该插件的源码 Ref/apply 失败分派及
+   拥有型转移仍不在此私有证明内。Windows Clang 20 ASan 的定向
+   `--cross-package-container-test` 模式通过。两次本地完整 ASan canonical
+   均更早停在已知的 LLVM 20 COFF `IMAGE_REL_AMD64_ADDR32NB` 重定位错误，
+   因此不能声称本次完整的 sanitizer canonical 通过。合法源码 Fragment
+   不能产生重复 resume 失败：Sema 与
    sealed CFG 验证器都限制每条路径至多一次 resume。当前 Native v1 export
    registry 也没有可执行 Fragment binding profile，其 Fragment 行不带 entry。
-   在声称 verified plugin 失败门通过之前，须定义并验证相应 profile，或采用
-   合法源码可触发的失败路径；仍须覆盖名义／contract
+   源码 Ref/apply 的 verified plugin 失败路径仍需合法的生成续体失败，或另行
+   定义并验证可执行 Native Fragment profile；仍须覆盖名义／contract
    错配、入口失败、正常／提前退出及清理与 pin 释放。完成此门和剩余控制流用例后，
    `source-ref-apply` 才可脱离
    `implementation-open`。

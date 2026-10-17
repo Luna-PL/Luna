@@ -2530,13 +2530,23 @@ not a public ABI decision or stable-release approval:
    dispatch under an observable Runtime-issued probe Ref. The failure variant
    pairs its exact verified owner and consumer in a host Runtime, then reports
    execution failure under a probe Ref after that Runtime is destroyed; two
-   fresh calls succeed with the same Ref. A failed dispatch from a verified
-   plugin generation and owning transfer remain outside this private proof.
+   fresh calls succeed with the same Ref. A separate direct Runtime dispatch
+   now invokes the independently verified Moon plugin generation after host
+   Runtime teardown: its single legal resume propagates an injected base-
+   continuation failure, two fresh dispatches succeed, and discard skips the
+   base continuation. That proves the verified plugin's pin and failure path,
+   while a failed source Ref/apply dispatch using that verified plugin and
+   owning transfer remain outside this private proof. The focused Windows
+   Clang 20 ASan `--cross-package-container-test` mode passes. Two full local
+   ASan canonical attempts stopped earlier at the known LLVM 20 COFF
+   `IMAGE_REL_AMD64_ADDR32NB` relocation failure, so they do not establish a
+   complete sanitized canonical run for this change.
    A legal source Fragment cannot produce the repeated-resume failure: Sema
    and the sealed CFG verifier enforce one resume per path. The current Native
    v1 export registry also has no executable Fragment binding profile; its
-   Fragment rows carry no entry. Specify and verify such a profile, or use a
-   legal source-level failure, before claiming the verified-plugin failure gate.
+   Fragment rows carry no entry. A source Ref/apply failure path with a verified
+   plugin still needs a legal generated continuation failure or a separately
+   specified and verified executable Native Fragment profile.
    Include nominal/contract mismatch, failed ingress, normal and early exits,
    and cleanup/pin-release regressions. Only after this gate and the remaining
    control-flow cases pass may

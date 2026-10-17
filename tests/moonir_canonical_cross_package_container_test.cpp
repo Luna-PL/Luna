@@ -60,6 +60,19 @@ struct VerifiedRefFlowProbe {
     bool valid = true;
 };
 
+struct VerifiedPluginContinuationProbe {
+    unsigned calls = 0;
+    bool fail = false;
+};
+
+int32_t continueVerifiedPlugin(void* context) {
+    auto& probe = *static_cast<VerifiedPluginContinuationProbe*>(context);
+    ++probe.calls;
+    return probe.fail
+        ? LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1
+        : LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1;
+}
+
 thread_local VerifiedRefFlowProbe* activeVerifiedRefFlowProbe = nullptr;
 
 void executeVerifiedRefFlowProbe(void*, void* activation) {
@@ -1172,8 +1185,44 @@ int runCrossPackageContainerTest() {
                 return fail("verified cross-generation dispatch failed after Runtime teardown");
         }
     }
-    // Leave the borrowed Ref as the only remaining pin on the plugin generation.
     pluginBinding = {};
+    const auto* pluginArguments = owner.findType(slot->controlArgumentsType);
+    if (!pluginArguments || pluginArguments->valueSize < sizeof(int32_t) ||
+        pluginArguments->valueSize > 4096 ||
+        pluginArguments->valueAlignment == 0 ||
+        pluginArguments->valueAlignment > 4096)
+        return fail("verified plugin lost its frozen Slot argument layout");
+    alignas(4096) unsigned char pluginArgumentStorage[4096] = {};
+    VerifiedPluginContinuationProbe pluginContinuation;
+    const auto dispatchVerifiedPlugin = [&](int32_t value) {
+        std::memcpy(pluginArgumentStorage, &value, sizeof(value));
+        return luna_runtime_fragment_dispatch_v1(
+            oneContext.opaque(), requirement.slotId.c_str(),
+            requirement.contractId.c_str(),
+            pluginArguments->abiLayoutId.value.c_str(),
+            pluginArguments->valueSize,
+            pluginArguments->valueAlignment, pluginArgumentStorage,
+            continueVerifiedPlugin, &pluginContinuation);
+    };
+    pluginContinuation.fail = true;
+    if (dispatchVerifiedPlugin(0) !=
+            LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
+        pluginContinuation.calls != 1)
+        return fail("verified plugin did not propagate continuation failure");
+    pluginContinuation.fail = false;
+    for (int iteration = 0; iteration < 2; ++iteration) {
+        pluginContinuation.calls = 0;
+        if (dispatchVerifiedPlugin(0) !=
+                LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1 ||
+            pluginContinuation.calls != 1)
+            return fail("verified plugin did not recover after continuation failure");
+    }
+    pluginContinuation.calls = 0;
+    if (dispatchVerifiedPlugin(1) !=
+            LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1 ||
+        pluginContinuation.calls != 0)
+        return fail("verified plugin discard unexpectedly entered continuation");
+    // Leave the borrowed Ref as the only remaining pin on the plugin generation.
     oneContext = {};
     if (!borrowedRef ||
         refEntry->call(nullptr, const_cast<void*>(borrowedRef.opaque())) !=

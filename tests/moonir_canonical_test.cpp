@@ -45,6 +45,8 @@ using namespace canonical_test;
 int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--split-allocation-probe")
         return runSplitAllocationProbe();
+    if (argc == 2 && std::string(argv[1]) == "--cross-package-container-test")
+        return runCrossPackageContainerTest();
     if (argc > 1) return luna::benchmarks::runCompiledFragmentBenchmark(argc, argv);
     if (const int result = luna::benchmarks::checkCompiledFragmentWorkload()) return result;
     FunctionDecl unaryRoute;
