@@ -1504,6 +1504,8 @@ consumer generation。其 module lease 就是准备凭据本身，保留精确 o
 返回的不透明凭据核对共享 lease 所有权，而不只比较包 ID 与摘要。staging 不解析任何 binding
 或 Ref／unit candidate，凭据也不暴露代码入口或 Runtime pin。空凭据及针对同一产物另行签发的
 凭据不能借用或替换已加载 generation。generation ID 只在 loader 自有 Runtime 内有意义。
+普通 staging verifier 核对精确物化键并要求 module 关系列表为空；只读探针在暂存前
+拒绝改动的物化键及两类新增 module 关系。
 普通构建现还签发只含元数据的导入 Slot 准入凭据：它将已加载 consumer 绑定至精确源码身份
 及 Slot 要求，复核解码的 import 记录与已固定 owner 的公开 Slot binding，并保留两侧
 generation pin。错误的源码或 Slot 身份，以及同一字节另行签发的准备凭据，都无法借用已签发的

@@ -136,6 +136,13 @@ public:
     // Artifact identity is necessary but does not replace the module lease check.
     bool matchesConsumer(
         const luna::runtime::MoonRuntime::PinnedGeneration& consumer) const;
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    // Exercise the ordinary inert-generation request verifier without staging.
+    bool verifyInertRequestMutationForTest(
+        const std::function<void(luna::runtime::GenerationStagingRequest&)>&
+            mutate,
+        std::string& error) const;
+#endif
 
 private:
     friend class VerifiedMoonImportedSlotGeneration;

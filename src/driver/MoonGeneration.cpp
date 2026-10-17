@@ -765,6 +765,64 @@ bool VerifiedMoonRefUnitPreparation::matchesConsumer(
            consumer.contentDigest() == state_->contentDigest;
 }
 
+namespace {
+
+std::string inertRefUnitMaterializationKey() {
+    return std::string("luna.internal-ref-unit-preparation.v1:llvm=") +
+        LLVM_VERSION_STRING + ":ir=O0:orc=default";
+}
+
+luna::runtime::GenerationStagingRequest makeInertRefUnitRequest(
+    const VerifiedMoonRefUnitPreparationState& state,
+    const std::shared_ptr<const void>& lease) {
+    luna::runtime::GenerationStagingRequest request;
+    request.moduleId = state.manifest.packageId;
+    request.contentDigest = state.contentDigest;
+    request.materializationKey = inertRefUnitMaterializationKey();
+    request.moduleLease = lease;
+    return request;
+}
+
+bool verifyInertRefUnitRequest(
+    const luna::runtime::GenerationStagingRequest& candidate,
+    const VerifiedMoonRefUnitPreparationState& state,
+    const std::shared_ptr<const void>& lease,
+    std::string& error) {
+    if (candidate.moduleId != state.manifest.packageId ||
+        candidate.contentDigest != state.contentDigest ||
+        candidate.materializationKey != inertRefUnitMaterializationKey() ||
+        candidate.moduleLease.get() != lease.get() ||
+        candidate.moduleLease.owner_before(lease) ||
+        lease.owner_before(candidate.moduleLease) ||
+        !candidate.refUnitCandidates.empty() ||
+        candidate.refUnitCaller ||
+        !candidate.requiredAbsentModuleIds.empty() ||
+        !candidate.requiredActiveModules.empty()) {
+        error = "verified Ref/unit generation changed before staging";
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+bool VerifiedMoonRefUnitPreparation::verifyInertRequestMutationForTest(
+    const std::function<void(luna::runtime::GenerationStagingRequest&)>&
+        mutate,
+    std::string& error) const {
+    error.clear();
+    if (!state_ || !mutate) {
+        error = "verified Ref/unit inert request probe requires preparation and mutation";
+        return false;
+    }
+    const auto lease = std::shared_ptr<const void>(state_);
+    auto request = makeInertRefUnitRequest(*state_, lease);
+    mutate(request);
+    return verifyInertRefUnitRequest(request, *state_, lease, error);
+}
+#endif
+
 bool loadVerifiedMoonRefUnitPreparation(
     const std::vector<uint8_t>& consumerContainerBytes,
     const VerifiedMoonSlotOwner& owner,
@@ -869,13 +927,7 @@ bool loadVerifiedMoonRefUnitGenerationOnce(
         return false;
     }
     const auto lease = std::shared_ptr<const void>(preparation.state_);
-    luna::runtime::GenerationStagingRequest request;
-    request.moduleId = preparation.state_->manifest.packageId;
-    request.contentDigest = preparation.state_->contentDigest;
-    request.materializationKey =
-        std::string("luna.internal-ref-unit-preparation.v1:llvm=") +
-        LLVM_VERSION_STRING + ":ir=O0:orc=default";
-    request.moduleLease = lease;
+    auto request = makeInertRefUnitRequest(*preparation.state_, lease);
 
     luna::runtime::MoonRuntime runtime;
     luna::runtime::MoonRuntime::StagedGeneration staged;
@@ -884,18 +936,8 @@ bool loadVerifiedMoonRefUnitGenerationOnce(
             request,
             [&state, &lease](const auto& candidate,
                              std::string& verificationError) {
-                if (candidate.moduleId != state.manifest.packageId ||
-                    candidate.contentDigest != state.contentDigest ||
-                    candidate.moduleLease.get() != lease.get() ||
-                    candidate.moduleLease.owner_before(lease) ||
-                    lease.owner_before(candidate.moduleLease) ||
-                    !candidate.refUnitCandidates.empty() ||
-                    candidate.refUnitCaller) {
-                    verificationError =
-                        "verified Ref/unit generation changed before staging";
-                    return false;
-                }
-                return true;
+                return verifyInertRefUnitRequest(
+                    candidate, state, lease, verificationError);
             },
             [](const auto&, auto& bindings, std::string& resolutionError) {
                 if (!bindings.empty()) {

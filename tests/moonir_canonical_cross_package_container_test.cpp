@@ -686,6 +686,26 @@ int runCrossPackageContainerTest() {
                 refManifest.dataLayout, consumerPreparation, error) ||
             consumerPreparation.ownerGenerationId() != ownerGenerationId)
             return fail("verified Ref consumer preparation lost or replaced its owner");
+        if (!consumerPreparation.verifyInertRequestMutationForTest(
+                [](auto&) {}, error) ||
+            consumerPreparation.verifyInertRequestMutationForTest(
+                [](auto& request) {
+                    request.materializationKey += ":foreign";
+                }, error) ||
+            error != "verified Ref/unit generation changed before staging" ||
+            consumerPreparation.verifyInertRequestMutationForTest(
+                [](auto& request) {
+                    request.requiredAbsentModuleIds =
+                        {"org.luna.test.foreign-owner"};
+                }, error) ||
+            error != "verified Ref/unit generation changed before staging" ||
+            consumerPreparation.verifyInertRequestMutationForTest(
+                [](auto& request) {
+                    request.requiredActiveModules =
+                        {{"org.luna.test.foreign-owner", 1}};
+                }, error) ||
+            error != "verified Ref/unit generation changed before staging")
+            return fail("inert Ref consumer request accepted changed materialization or relations");
         if (luna::driver::loadVerifiedMoonRefUnitGenerationOnce(
                 rejectedPreparation, verifiedConsumerGeneration, error) ||
             verifiedConsumerGeneration ||

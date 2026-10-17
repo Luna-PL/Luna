@@ -2021,7 +2021,9 @@ the returned opaque token checks shared lease ownership, not just package ID
 and digest. Staging resolves no bindings or Ref/unit candidates, and the token
 does not expose the code entry or Runtime pin. Empty and independently issued
 proofs cannot borrow or replace that loaded generation. Its generation ID is
-local to the loader-owned Runtime.
+local to the loader-owned Runtime. The ordinary staging verifier checks the
+exact materialization key and requires empty module relation lists; a read-only
+probe rejects altered keys and both kinds of added relation before staging.
 An ordinary-build, metadata-only imported-Slot proof now binds that loaded
 consumer to its exact source identity and Slot requirement, rechecks the
 decoded import record and the pinned owner's public Slot binding, and retains
