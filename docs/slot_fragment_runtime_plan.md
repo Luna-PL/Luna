@@ -1718,8 +1718,11 @@ differ from the heap allocation layout. A separate producer-side scalar-fork
 check now binds body tag `1` to the scalar Ok arm, requires its injection
 failure to return status `3` without output writes, and requires success to
 write tag `1` and the scalar extracted from that body result before status
-`0`. Transfer preflight failures, the resource success commit and the full
-host status graph remain separate proof work.
+`0`. A resource-commit check now binds body tag `0` to the owned Err arm,
+requires a non-null owner and zero injection before commit, and checks that
+success writes tag `0` and exactly that returned owner before status `0`.
+Transfer preflight failures and the full host status graph remain separate
+proof work.
 
 The private generated transfer entry now consumes those source facts for the
 candidate owned-error shape and checks its emitted C calling convention,

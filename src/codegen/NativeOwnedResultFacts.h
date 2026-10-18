@@ -150,4 +150,11 @@ bool verifyNativeOwnedResultTransferScalarFork(
     uint32_t injectedFailureStatus, uint32_t successStatus,
     std::string& error);
 
+// Checks the owned-error transfer's resource Err commit from body tag and
+// non-null owner gates through the zero-injection edge to tag and owner stores.
+bool verifyNativeOwnedResultTransferResourceCommit(
+    const llvm::Module& generated, const std::string& transferLinkageName,
+    const NativeOwnedResultSourceFacts& source,
+    uint32_t successStatus, std::string& error);
+
 } // namespace luna::codegen

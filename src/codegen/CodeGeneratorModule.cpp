@@ -2649,6 +2649,13 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                         LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST,
                         failure))
                     return false;
+                if (privateOwnedResultFacts &&
+                    !luna::codegen::verifyNativeOwnedResultTransferResourceCommit(
+                        *proof.mModule, transfer->getName().str(),
+                        *privateOwnedResultFacts,
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST,
+                        failure))
+                    return false;
                 dropBuilder.SetInsertPoint(cleanupEnd);
                 dropBuilder.CreateRet(llvm::ConstantInt::get(i32Ty, 0));
                 if (privateOwnedResultFacts) {

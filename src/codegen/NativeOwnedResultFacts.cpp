@@ -1177,4 +1177,127 @@ bool verifyNativeOwnedResultTransferScalarFork(
     return true;
 }
 
+bool verifyNativeOwnedResultTransferResourceCommit(
+    const llvm::Module& generated, const std::string& transferLinkageName,
+    const NativeOwnedResultSourceFacts& source,
+    uint32_t successStatus, std::string& error) {
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    const auto* transfer = generated.getFunction(transferLinkageName);
+    const auto* body = generated.getFunction(source.sourceLinkageName);
+    if (!transfer || transfer->isDeclaration() || transfer->isVarArg() ||
+        transfer->getCallingConv() != llvm::CallingConv::C ||
+        !transfer->getReturnType()->isIntegerTy(32) ||
+        transfer->arg_size() != 6 || !transfer->hasExternalLinkage() ||
+        !body || body->isDeclaration() || !body->hasInternalLinkage() ||
+        !transfer->getArg(5)->getType()->isIntegerTy(32))
+        return reject("Native v3 resource commit lacks its source profile");
+    for (unsigned index = 0; index < 5; ++index)
+        if (!transfer->getArg(index)->getType()->isPointerTy() ||
+            transfer->getArg(index)->getType()->getPointerAddressSpace() != 0)
+            return reject("Native v3 resource commit changed a pointer parameter");
+    const llvm::CallInst* bodyCall = nullptr;
+    for (const auto& block : *transfer)
+        for (const auto& instruction : block)
+            if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                    &instruction); call && call->getCalledFunction() == body) {
+                if (bodyCall)
+                    return reject("Native v3 resource commit calls the body twice");
+                bodyCall = call;
+            }
+    if (!bodyCall)
+        return reject("Native v3 resource commit lost the body call");
+    const auto* dispatch = bodyCall->getParent();
+    const auto* bodyBranch = llvm::dyn_cast<llvm::BranchInst>(
+        dispatch->getTerminator());
+    const auto* tag = bodyBranch && bodyBranch->isConditional()
+        ? llvm::dyn_cast<llvm::ExtractValueInst>(
+            bodyBranch->getCondition()) : nullptr;
+    if (!bodyBranch || !bodyBranch->isConditional() ||
+        dispatch->size() != 3 || !tag || tag->getNumIndices() != 1 ||
+        tag->getIndices()[0] != 0 ||
+        tag->getAggregateOperand() != bodyCall ||
+        !tag->getType()->isIntegerTy(1))
+        return reject("Native v3 resource commit lost its body tag fork");
+    const auto* resource = bodyBranch->getSuccessor(1);
+    if (resource == bodyBranch->getSuccessor(0) ||
+        std::distance(llvm::pred_begin(resource),
+                      llvm::pred_end(resource)) != 1 ||
+        *llvm::pred_begin(resource) != dispatch || resource->size() != 4)
+        return reject("Native v3 resource commit bypasses body tag dispatch");
+    const auto* extracted = llvm::dyn_cast<llvm::ExtractValueInst>(
+        &resource->front());
+    const auto* owner = extracted
+        ? llvm::dyn_cast<llvm::IntToPtrInst>(extracted->getNextNode())
+        : nullptr;
+    const auto* nonnull = owner
+        ? llvm::dyn_cast<llvm::ICmpInst>(owner->getNextNode()) : nullptr;
+    const auto* ownerBranch = llvm::dyn_cast<llvm::BranchInst>(
+        resource->getTerminator());
+    if (!extracted || extracted->getNumIndices() != 2 ||
+        extracted->getIndices()[0] != 1 ||
+        extracted->getIndices()[1] != 0 ||
+        extracted->getAggregateOperand() != bodyCall ||
+        !owner || owner->getOperand(0) != extracted ||
+        owner->getType() != transfer->getArg(4)->getType() ||
+        !nonnull || nonnull->getPredicate() != llvm::ICmpInst::ICMP_NE ||
+        !((nonnull->getOperand(0) == owner &&
+           llvm::isa<llvm::ConstantPointerNull>(nonnull->getOperand(1))) ||
+          (nonnull->getOperand(1) == owner &&
+           llvm::isa<llvm::ConstantPointerNull>(nonnull->getOperand(0)))) ||
+        !ownerBranch || !ownerBranch->isConditional() ||
+        ownerBranch->getCondition() != nonnull)
+        return reject("Native v3 resource commit lost the returned owner gate");
+    const auto* valid = ownerBranch->getSuccessor(0);
+    if (valid == ownerBranch->getSuccessor(1) ||
+        std::distance(llvm::pred_begin(valid),
+                      llvm::pred_end(valid)) != 1 ||
+        *llvm::pred_begin(valid) != resource || valid->size() != 2)
+        return reject("Native v3 resource commit bypasses owner validation");
+    const auto* injected = llvm::dyn_cast<llvm::ICmpInst>(&valid->front());
+    const auto* injectionBranch = llvm::dyn_cast<llvm::BranchInst>(
+        valid->getTerminator());
+    if (!injected || injected->getPredicate() != llvm::ICmpInst::ICMP_NE ||
+        !((injected->getOperand(0) == transfer->getArg(5) &&
+           llvm::isa<llvm::ConstantInt>(injected->getOperand(1)) &&
+           llvm::cast<llvm::ConstantInt>(
+               injected->getOperand(1))->isZero()) ||
+          (injected->getOperand(1) == transfer->getArg(5) &&
+           llvm::isa<llvm::ConstantInt>(injected->getOperand(0)) &&
+           llvm::cast<llvm::ConstantInt>(
+               injected->getOperand(0))->isZero())) ||
+        !injectionBranch || !injectionBranch->isConditional() ||
+        injectionBranch->getCondition() != injected)
+        return reject("Native v3 resource commit lost its injection gate");
+    const auto* commit = injectionBranch->getSuccessor(1);
+    if (commit == injectionBranch->getSuccessor(0) ||
+        std::distance(llvm::pred_begin(commit),
+                      llvm::pred_end(commit)) != 1 ||
+        *llvm::pred_begin(commit) != valid || commit->size() != 3)
+        return reject("Native v3 resource commit bypasses its success edge");
+    const auto* tagStore = llvm::dyn_cast<llvm::StoreInst>(&commit->front());
+    const auto* ownerStore = tagStore
+        ? llvm::dyn_cast<llvm::StoreInst>(tagStore->getNextNode()) : nullptr;
+    const auto* returned = llvm::dyn_cast<llvm::ReturnInst>(
+        commit->getTerminator());
+    const auto* tagValue = tagStore
+        ? llvm::dyn_cast<llvm::ConstantInt>(tagStore->getValueOperand())
+        : nullptr;
+    const auto* status = returned
+        ? llvm::dyn_cast_or_null<llvm::ConstantInt>(
+            returned->getReturnValue()) : nullptr;
+    if (!tagStore || tagStore->getPointerOperand() != transfer->getArg(2) ||
+        !tagValue || tagValue->getBitWidth() != 32 || !tagValue->isZero() ||
+        !ownerStore || ownerStore->getPointerOperand() !=
+            transfer->getArg(4) ||
+        ownerStore->getValueOperand() != owner ||
+        !status || status->getBitWidth() != 32 ||
+        status->getZExtValue() != successStatus)
+        return reject("Native v3 resource commit changed tag, owner or status");
+    error.clear();
+    return true;
+}
+
 } // namespace luna::codegen

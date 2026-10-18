@@ -5660,8 +5660,9 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto* ownedCleanupOwner = ownedPairBuilder.CreateIntToPtr(
         ownedPairBuilder.CreateExtractValue(ownedCleanupBodyCall, {1, 0}),
         ownedPairPtr);
-    ownedPairBuilder.CreateCondBr(
-        ownedPairBuilder.CreateIsNotNull(ownedCleanupOwner),
+    auto* ownedCleanupNonNull = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateIsNotNull(ownedCleanupOwner));
+    ownedPairBuilder.CreateCondBr(ownedCleanupNonNull,
         ownedCleanupValid, ownedCleanupNull);
     ownedPairBuilder.SetInsertPoint(ownedCleanupNull);
     ownedPairBuilder.CreateRet(llvm::ConstantInt::get(ownedPairI32,
@@ -5692,7 +5693,13 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         llvm::ConstantInt::get(ownedPairI32,
             LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST));
     ownedPairBuilder.SetInsertPoint(ownedCleanupCommit);
-    ownedPairBuilder.CreateRet(llvm::ConstantInt::get(ownedPairI32, 0));
+    auto* ownedCleanupResourceTagStore = ownedPairBuilder.CreateStore(
+        llvm::ConstantInt::get(ownedPairI32, 0),
+        ownedCleanupTransfer->getArg(2));
+    auto* ownedCleanupOwnerStore = ownedPairBuilder.CreateStore(
+        ownedCleanupOwner, ownedCleanupTransfer->getArg(4));
+    auto* ownedCleanupResourceReturn = ownedPairBuilder.CreateRet(
+        llvm::ConstantInt::get(ownedPairI32, 0));
     luna::codegen::NativeOwnedResultSourceFacts ownedCleanupFacts;
     ownedCleanupFacts.sourceLinkageName = ownedCleanupBody->getName().str();
     ownedCleanupFacts.errorValueSize = sizeof(void*);
@@ -5803,6 +5810,63 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         acceptedWrongScalarSuccess || acceptedScalarFailureWrite ||
         !verifyScalarFork())
         return fail("Native v3 transfer accepted altered scalar fork");
+    const auto verifyResourceCommit = [&] {
+        return luna::codegen::verifyNativeOwnedResultTransferResourceCommit(
+            ownedPairModule, ownedCleanupTransfer->getName().str(),
+            ownedCleanupFacts,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST,
+            ownedSourceError);
+    };
+    if (!verifyResourceCommit())
+        return fail("Native v3 transfer lost resource commit");
+    ownedCleanupDispatch->swapSuccessors();
+    const bool acceptedWrongResourceDispatch = verifyResourceCommit();
+    ownedCleanupDispatch->swapSuccessors();
+    auto* ownedCleanupOwnerInstruction = llvm::cast<llvm::IntToPtrInst>(
+        ownedCleanupOwner);
+    auto* ownedCleanupOwnerSource =
+        ownedCleanupOwnerInstruction->getOperand(0);
+    ownedCleanupOwnerInstruction->setOperand(0,
+        llvm::ConstantInt::get(ownedPairSize, 42));
+    const bool acceptedUnrelatedResourceSource = verifyResourceCommit();
+    ownedCleanupOwnerInstruction->setOperand(0, ownedCleanupOwnerSource);
+    ownedCleanupNonNull->setPredicate(llvm::ICmpInst::ICMP_EQ);
+    const bool acceptedInvertedOwnerGate = verifyResourceCommit();
+    ownedCleanupNonNull->setPredicate(llvm::ICmpInst::ICMP_NE);
+    ownedCleanupInjection->setPredicate(llvm::ICmpInst::ICMP_EQ);
+    const bool acceptedInvertedResourceInjection = verifyResourceCommit();
+    ownedCleanupInjection->setPredicate(llvm::ICmpInst::ICMP_NE);
+    ownedCleanupResourceTagStore->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 1));
+    const bool acceptedWrongResourceTag = verifyResourceCommit();
+    ownedCleanupResourceTagStore->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    ownedCleanupOwnerStore->setOperand(0,
+        ownedCleanupTransfer->getArg(0));
+    const bool acceptedUnrelatedResourceOwner = verifyResourceCommit();
+    ownedCleanupOwnerStore->setOperand(0, ownedCleanupOwner);
+    ownedCleanupOwnerStore->setOperand(1,
+        ownedCleanupTransfer->getArg(3));
+    const bool acceptedWrongResourceCell = verifyResourceCommit();
+    ownedCleanupOwnerStore->setOperand(1,
+        ownedCleanupTransfer->getArg(4));
+    ownedCleanupResourceReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 3));
+    const bool acceptedWrongResourceSuccess = verifyResourceCommit();
+    ownedCleanupResourceReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    llvm::IRBuilder<> resourceExtraWriteBuilder(ownedCleanupResourceReturn);
+    auto* resourceExtraWrite = resourceExtraWriteBuilder.CreateStore(
+        llvm::ConstantInt::get(ownedPairI32, 1),
+        ownedCleanupTransfer->getArg(3));
+    const bool acceptedResourceScalarWrite = verifyResourceCommit();
+    resourceExtraWrite->eraseFromParent();
+    if (acceptedWrongResourceDispatch || acceptedUnrelatedResourceSource ||
+        acceptedInvertedOwnerGate || acceptedInvertedResourceInjection ||
+        acceptedWrongResourceTag || acceptedUnrelatedResourceOwner ||
+        acceptedWrongResourceCell || acceptedWrongResourceSuccess ||
+        acceptedResourceScalarWrite || !verifyResourceCommit())
+        return fail("Native v3 transfer accepted altered resource commit");
     auto mutableOwnedError = std::find_if(
         tryApplyModule->typeTable.begin(), tryApplyModule->typeTable.end(),
         [&](const moon::TypeRecord& type) {
