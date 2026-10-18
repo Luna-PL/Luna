@@ -618,7 +618,7 @@ CodeGenerator::loadPrivateRuntimeFragmentRefResultEntryForTest(
     const auto& proof = *executable->mPrivateOwnedResultEntryProof;
     if (proof.entryAbi != LUNA_NATIVE_ENTRY_ABI_REF_RESULT_OWNER_V1 ||
         proof.statusDomain !=
-            LUNA_NATIVE_STATUS_DOMAIN_REF_RESULT_OWNER_V1 ||
+            luna::codegen::NativeOwnedResultPrivateStatusDomainV1 ||
         proof.entryLinkageName !=
             "__luna_private_ref_apply_entry_v1_test" ||
         proof.injectionLinkageName !=
@@ -2985,7 +2985,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                             hostEntry->getName().str(),
                             dropEntry->getName().str(),
                             LUNA_NATIVE_ENTRY_ABI_REF_RESULT_OWNER_V1,
-                            LUNA_NATIVE_STATUS_DOMAIN_REF_RESULT_OWNER_V1};
+                            luna::codegen::NativeOwnedResultPrivateStatusDomainV1};
                 }
             }
             if (returnType->kind == TypeKind::Unit &&

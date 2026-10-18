@@ -63,14 +63,19 @@ struct NativeOwnedResultDescriptorV3Candidate {
 };
 
 // Test-only pointer-free pairing of a verified generated host entry with its
-// sealed source facts. A real v3 row still needs artifact and loader binding.
+// sealed source facts. Status 3 is injected failure in this private graph,
+// rather than the public v3 execution-failure contract. A real v3 row still
+// needs a distinct status proof, artifact binding and loader binding.
+inline constexpr uint32_t NativeOwnedResultPrivateStatusDomainV1 = 0;
+static_assert(NativeOwnedResultPrivateStatusDomainV1 !=
+              LUNA_NATIVE_STATUS_DOMAIN_REF_RESULT_OWNER_V1);
 struct NativeOwnedResultEntryProof {
     NativeOwnedResultSourceFacts source;
     std::string entryLinkageName;
     std::string injectionLinkageName;
     std::string dropLinkageName;
     uint32_t entryAbi = LUNA_NATIVE_ENTRY_ABI_REF_RESULT_OWNER_V1;
-    uint32_t statusDomain = LUNA_NATIVE_STATUS_DOMAIN_REF_RESULT_OWNER_V1;
+    uint32_t statusDomain = NativeOwnedResultPrivateStatusDomainV1;
 };
 
 bool deriveNativeOwnedResultSourceFacts(

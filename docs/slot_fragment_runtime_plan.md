@@ -1774,9 +1774,10 @@ preflight verifiers. It requires exactly 18 reachable blocks, three entry
 scratch allocations, four non-volatile loads, four stores to the checked
 scratch and caller output cells, five recognized calls, and seven return
 paths. It rejects extra blocks, scratch cells, calls, memory effects and
-volatile or atomic accesses. This bounds the generated private host wrapper's
-control flow and direct output writes; it does not prove the transfer body's
-complete cleanup, Runtime call behavior or an artifact proof claim.
+volatile or atomic accesses. Together with the separately checked transfer
+and transferred-Drop graphs, this bounds the generated private call chain's
+control flow and direct output writes. Runtime call behavior and an artifact
+proof claim remain separate.
 
 The private generated transfer entry now consumes those source facts for the
 candidate owned-error shape and checks its emitted C calling convention,
@@ -1805,8 +1806,10 @@ after success. Resource Err and scalar Ok, forged source, wrong Ref target,
 occupied or aliased outputs, invalid lease, and failed adoption have executable
 checks. A separate six-argument C candidate entry fixes test injection to
 zero. Its pointer-free private proof pairs the generated entry, injection and
-Drop linkage names, ABI profile and status domain with the sealed source facts;
-the loaded adapter checks that proof before looking up code in the same JIT
+Drop linkage names, ABI profile and a private status-domain marker with the
+sealed source facts. Private status `3` means injected failure, so that proof
+cannot claim the public v3 execution-failure status domain. The loaded adapter
+checks that proof before looking up code in the same JIT
 module. The six-argument entry is still limited to the private JIT candidate
 shape and does not create a Native v3 export.
 The private loaded Result adapter now also has a typed host call. It checks
@@ -1894,9 +1897,10 @@ at the known LLVM 20.1.8 COFF ordered-section relocation failure, before the
 carrier path; Linux ASAN remains to be checked. The private generated C host
 wrapper now proves the candidate commit and lease behavior for one admitted
 shape using an opaque Runtime-issued lease token. A private six-argument
-candidate entry and status domain are now fixed and bound to frozen source
-facts in the retained JIT module. The next production step is to carry that
-typed proof into a generated v3 row and `PinnedBinding`. The v3 loader now
+candidate entry and private status domain are now fixed and bound to frozen
+source facts in the retained JIT module. Before generating a public v3 row,
+prove recoverable execution failure and source Drop behavior, then bind the
+public status domain, artifact proof and `PinnedBinding`. The v3 loader now
 rejects v1 entry aliases and validates an independently resolved six-argument
 symbol in the staged image. It also checks that the returned descriptor and
 export table belong to that image before reading them, and checks the image
