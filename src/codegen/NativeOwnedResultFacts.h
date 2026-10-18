@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <tuple>
+#include <vector>
 
 #include "runtime/NativeArtifactABI.h"
 
@@ -128,6 +129,17 @@ bool verifyNativeOwnedResultHostOutputAlignment(
 // edge, using their generated ABI sizes and unsigned address-gap checks.
 bool verifyNativeOwnedResultHostOutputDisjointness(
     const llvm::Module& generated, const std::string& hostLinkageName,
+    std::string& error);
+
+// Checks the private transfer's injected owned-error failure path against
+// source-derived cleanup calls and physical owner allocation layout. This is
+// one failure path, not a proof of all transfer statuses.
+bool verifyNativeOwnedResultTransferInjectedCleanup(
+    const llvm::Module& generated, const std::string& transferLinkageName,
+    const NativeOwnedResultSourceFacts& source,
+    const std::vector<std::string>& expectedCleanupCalls,
+    uint64_t allocationSize, uint64_t allocationAlignment,
+    uint32_t invalidResourceStatus, uint32_t injectedFailureStatus,
     std::string& error);
 
 } // namespace luna::codegen

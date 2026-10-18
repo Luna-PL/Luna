@@ -866,4 +866,182 @@ bool verifyNativeOwnedResultHostOutputDisjointness(
     return true;
 }
 
+bool verifyNativeOwnedResultTransferInjectedCleanup(
+    const llvm::Module& generated, const std::string& transferLinkageName,
+    const NativeOwnedResultSourceFacts& source,
+    const std::vector<std::string>& expectedCleanupCalls,
+    uint64_t allocationSize, uint64_t allocationAlignment,
+    uint32_t invalidResourceStatus, uint32_t injectedFailureStatus,
+    std::string& error) {
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    const auto* transfer = generated.getFunction(transferLinkageName);
+    const auto* body = generated.getFunction(source.sourceLinkageName);
+    if (!transfer || transfer->isDeclaration() || transfer->isVarArg() ||
+        transfer->getCallingConv() != llvm::CallingConv::C ||
+        !transfer->getReturnType()->isIntegerTy(32) ||
+        transfer->arg_size() != 6 || !transfer->hasExternalLinkage() ||
+        !body || body->isDeclaration() || !body->hasInternalLinkage() ||
+        allocationSize == 0 || allocationSize > (1u << 20) ||
+        allocationAlignment == 0 || allocationAlignment > 4096 ||
+        (allocationAlignment & (allocationAlignment - 1)) != 0 ||
+        expectedCleanupCalls.size() < 2 ||
+        expectedCleanupCalls.front() == "rt_dealloc" ||
+        expectedCleanupCalls.back() != "rt_dealloc")
+        return reject("Native v3 transfer cleanup lacks its source profile");
+    for (unsigned index = 0; index < 5; ++index)
+        if (!transfer->getArg(index)->getType()->isPointerTy() ||
+            transfer->getArg(index)->getType()->getPointerAddressSpace() != 0)
+            return reject("Native v3 transfer cleanup changed a pointer parameter");
+    if (!transfer->getArg(5)->getType()->isIntegerTy(32))
+        return reject("Native v3 transfer cleanup changed its injection parameter");
+    const llvm::CallInst* bodyCall = nullptr;
+    const llvm::IntToPtrInst* returnedOwner = nullptr;
+    for (const auto& block : *transfer)
+        for (const auto& instruction : block) {
+            if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                    &instruction); call && call->getCalledFunction() == body) {
+                if (bodyCall)
+                    return reject("Native v3 transfer cleanup calls the body twice");
+                bodyCall = call;
+            }
+            if (const auto* owner = llvm::dyn_cast<llvm::IntToPtrInst>(
+                    &instruction)) {
+                const auto* extracted = llvm::dyn_cast<llvm::ExtractValueInst>(
+                    owner->getOperand(0));
+                if (extracted && extracted->getNumIndices() == 2 &&
+                    extracted->getIndices()[0] == 1 &&
+                    extracted->getIndices()[1] == 0) {
+                    if (returnedOwner)
+                        return reject("Native v3 transfer cleanup has ambiguous owner");
+                    returnedOwner = owner;
+                }
+            }
+        }
+    const auto* extracted = returnedOwner
+        ? llvm::dyn_cast<llvm::ExtractValueInst>(
+            returnedOwner->getOperand(0)) : nullptr;
+    if (!bodyCall || !returnedOwner || !extracted ||
+        extracted->getAggregateOperand() != bodyCall ||
+        returnedOwner->getType() != transfer->getArg(4)->getType())
+        return reject("Native v3 transfer cleanup lost the returned owner");
+    const auto* resource = returnedOwner->getParent();
+    const auto* resourceBranch = llvm::dyn_cast<llvm::BranchInst>(
+        resource->getTerminator());
+    const auto* nonnull = resourceBranch && resourceBranch->isConditional()
+        ? llvm::dyn_cast<llvm::ICmpInst>(
+            resourceBranch->getCondition()) : nullptr;
+    if (!nonnull || nonnull->getPredicate() != llvm::ICmpInst::ICMP_NE ||
+        !((nonnull->getOperand(0) == returnedOwner &&
+           llvm::isa<llvm::ConstantPointerNull>(nonnull->getOperand(1))) ||
+          (nonnull->getOperand(1) == returnedOwner &&
+           llvm::isa<llvm::ConstantPointerNull>(nonnull->getOperand(0)))))
+        return reject("Native v3 transfer cleanup lost its owner gate");
+    const auto* valid = resourceBranch->getSuccessor(0);
+    const auto* nullResource = resourceBranch->getSuccessor(1);
+    const auto statusReturn = [](const llvm::BasicBlock* block,
+                                 uint64_t status) {
+        const auto* returned = block->size() == 1
+            ? llvm::dyn_cast<llvm::ReturnInst>(
+                block->getTerminator()) : nullptr;
+        const auto* constant = returned
+            ? llvm::dyn_cast_or_null<llvm::ConstantInt>(
+                returned->getReturnValue()) : nullptr;
+        return constant && constant->getBitWidth() == 32 &&
+            constant->getZExtValue() == status;
+    };
+    if (!statusReturn(nullResource, invalidResourceStatus) ||
+        std::distance(llvm::pred_begin(valid),
+                      llvm::pred_end(valid)) != 1 ||
+        *llvm::pred_begin(valid) != resource || valid->size() != 2)
+        return reject("Native v3 transfer cleanup bypasses its owner gate");
+    const auto* injected = llvm::dyn_cast<llvm::ICmpInst>(&valid->front());
+    const auto* injectionBranch = llvm::dyn_cast<llvm::BranchInst>(
+        valid->getTerminator());
+    if (!injected || injected->getPredicate() !=
+            llvm::ICmpInst::ICMP_NE ||
+        !((injected->getOperand(0) == transfer->getArg(5) &&
+           llvm::isa<llvm::ConstantInt>(injected->getOperand(1)) &&
+           llvm::cast<llvm::ConstantInt>(
+               injected->getOperand(1))->isZero()) ||
+          (injected->getOperand(1) == transfer->getArg(5) &&
+           llvm::isa<llvm::ConstantInt>(injected->getOperand(0)) &&
+           llvm::cast<llvm::ConstantInt>(
+               injected->getOperand(0))->isZero())) ||
+        !injectionBranch || !injectionBranch->isConditional() ||
+        injectionBranch->getCondition() != injected)
+        return reject("Native v3 transfer cleanup lost its injection gate");
+    const auto* failed = injectionBranch->getSuccessor(0);
+    if (std::distance(llvm::pred_begin(failed),
+                      llvm::pred_end(failed)) != 1 ||
+        *llvm::pred_begin(failed) != valid ||
+        !llvm::isa<llvm::ReturnInst>(failed->getTerminator()))
+        return reject("Native v3 transfer cleanup bypasses its failure edge");
+    const auto* failedReturn = llvm::cast<llvm::ReturnInst>(
+        failed->getTerminator());
+    const auto* failedStatus = llvm::dyn_cast_or_null<llvm::ConstantInt>(
+        failedReturn->getReturnValue());
+    if (!failedStatus || failedStatus->getBitWidth() != 32 ||
+        failedStatus->getZExtValue() != injectedFailureStatus)
+        return reject("Native v3 transfer cleanup changed its failure status");
+    std::vector<const llvm::CallInst*> calls;
+    for (const auto& instruction : *failed) {
+        if (const auto* store = llvm::dyn_cast<llvm::StoreInst>(
+                &instruction))
+            if (!llvm::isa<llvm::AllocaInst>(store->getPointerOperand()))
+                return reject("Native v3 transfer cleanup writes outside local scratch");
+        if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                &instruction)) {
+            if (!call->getCalledFunction() ||
+                calls.size() == expectedCleanupCalls.size() ||
+                call->getCalledFunction()->getName() !=
+                    expectedCleanupCalls[calls.size()])
+                return reject("Native v3 transfer cleanup changed Drop order");
+            for (unsigned index = 0; index < call->arg_size(); ++index)
+                if (call->getArgOperand(index) == transfer->getArg(2) ||
+                    call->getArgOperand(index) == transfer->getArg(3) ||
+                    call->getArgOperand(index) == transfer->getArg(4))
+                    return reject("Native v3 transfer cleanup passed an output cell");
+            calls.push_back(call);
+        }
+    }
+    if (calls.size() != expectedCleanupCalls.size() ||
+        calls.front()->arg_size() < 1 ||
+        calls.front()->getArgOperand(0) != returnedOwner)
+        return reject("Native v3 transfer cleanup lost the root Drop owner");
+    const auto* deallocate = calls.back();
+    const auto* deallocateFunction = deallocate->getCalledFunction();
+    const auto* size = deallocate->arg_size() == 3
+        ? llvm::dyn_cast<llvm::ConstantInt>(
+            deallocate->getArgOperand(1)) : nullptr;
+    const auto* alignment = deallocate->arg_size() == 3
+        ? llvm::dyn_cast<llvm::ConstantInt>(
+            deallocate->getArgOperand(2)) : nullptr;
+    if (!deallocateFunction || !deallocateFunction->isDeclaration() ||
+        deallocateFunction->getCallingConv() != llvm::CallingConv::C ||
+        !deallocateFunction->getReturnType()->isVoidTy() ||
+        deallocate->getCallingConv() != llvm::CallingConv::C ||
+        deallocate->arg_size() != 3)
+        return reject("Native v3 transfer cleanup changed deallocation arity");
+    if (deallocate->getArgOperand(0) != returnedOwner)
+        return reject("Native v3 transfer cleanup changed deallocation owner");
+    if (!size || !alignment ||
+        size->getBitWidth() != sizeof(void*) * 8 ||
+        alignment->getBitWidth() != sizeof(void*) * 8)
+        return reject("Native v3 transfer cleanup changed deallocation type");
+    if (size->getZExtValue() != allocationSize ||
+        alignment->getZExtValue() != allocationAlignment) {
+        error = "Native v3 transfer cleanup changed deallocation layout: " +
+            std::to_string(size->getZExtValue()) + "/" +
+            std::to_string(alignment->getZExtValue()) + " versus " +
+            std::to_string(allocationSize) + "/" +
+            std::to_string(allocationAlignment);
+        return false;
+    }
+    error.clear();
+    return true;
+}
+
 } // namespace luna::codegen

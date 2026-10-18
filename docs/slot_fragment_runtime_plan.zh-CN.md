@@ -1264,7 +1264,7 @@ Luna 仍不生成 v3 行，也不赋予可调用的 generation profile。
 Drop 入口、代码 lease 和调用方 owner cell。只有成功状态能进入所核对的最终标签
 写入块；失败边对同一局部 owner cell 执行 Drop 并返回状态 `8`。私有 JIT 路径
 已执行该校验，且篡改 lease、分支、Drop、失败状态或标签目标均被拒绝。transfer
-函数内部的失败清理及宿主状态图的整体性质仍需单独的生产证明。
+函数内部的完整失败清理及宿主状态图的整体性质仍需单独的生产证明。
 生产侧 transfer 分支校验还要求单次调用传入原始 parent 和 Ref、各自独立的局部
 标签／标量／owner 暂存 cell、已置空的 owner cell，以及为零的测试注入参数。
 失败边直接返回 transfer 状态；只有成功边进入该分支的成功后继块。输出预检在
@@ -1277,6 +1277,11 @@ transfer 只能从这两道门禁后的单一前驱进入。入口处的输出�
 对齐掩码条件。三组地址间距校验现分别绑定 tag／scalar、tag／owner 和
 scalar／owner 的生成 ABI 大小。这些校验共同证明入口成功边在读取 owner cell
 之前满足输出有效性要求。
+独立的生产侧校验现覆盖私有 transfer 在 body 分派后注入的 owned Err 失败。
+它追踪返回 owner 经非空与注入门禁进入清理块，核对源码派生的 Drop 调用顺序，
+将根 Drop 和 `rt_dealloc` 绑定到该 owner 及堆对象实际分配大小／对齐，拒绝在
+清理块中直接写输出 cell，并要求返回状态 `3`。descriptor 的错误值布局描述指针载体，可能
+不同于堆对象的分配布局。其他 transfer 失败与宿主完整状态图仍需分别证明。
 
 私有生成的 transfer 入口现对候选拥有型 Err 形态消费这些源码事实，核对生成的 C
 调用约定、参数数目、返回类型、源码 linkage 及错误类型。它的六个参数依次是

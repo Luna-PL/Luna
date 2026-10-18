@@ -5590,6 +5590,133 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         acceptedMissingPairChecks || acceptedPrematureRead ||
         !verifyOwnedOutputDisjointness())
         return fail("Native v3 host accepted altered output disjointness");
+    auto* ownedCleanupValue = llvm::StructType::get(
+        ownedPairContext, std::vector<llvm::Type*>{ownedPairSize});
+    auto* ownedCleanupResult = llvm::StructType::get(
+        ownedPairContext, std::vector<llvm::Type*>{
+            llvm::Type::getInt1Ty(ownedPairContext), ownedCleanupValue});
+    auto* ownedCleanupBody = llvm::Function::Create(
+        llvm::FunctionType::get(ownedCleanupResult,
+            {ownedPairPtr, ownedPairPtr}, false),
+        llvm::Function::InternalLinkage,
+        "luna_native_owned_cleanup_source", ownedPairModule);
+    ownedPairBuilder.SetInsertPoint(llvm::BasicBlock::Create(
+        ownedPairContext, "entry", ownedCleanupBody));
+    ownedPairBuilder.CreateRet(llvm::UndefValue::get(ownedCleanupResult));
+    auto* ownedCleanupTransfer = llvm::Function::Create(
+        llvm::FunctionType::get(ownedPairI32,
+            {ownedPairPtr, ownedPairPtr, ownedPairPtr, ownedPairPtr,
+             ownedPairPtr, ownedPairI32}, false),
+        llvm::Function::ExternalLinkage,
+        "luna_native_owned_cleanup_transfer", ownedPairModule);
+    auto* ownedCleanupStart = llvm::BasicBlock::Create(
+        ownedPairContext, "entry", ownedCleanupTransfer);
+    auto* ownedCleanupResource = llvm::BasicBlock::Create(
+        ownedPairContext, "resource", ownedCleanupTransfer);
+    auto* ownedCleanupValid = llvm::BasicBlock::Create(
+        ownedPairContext, "resource.valid", ownedCleanupTransfer);
+    auto* ownedCleanupNull = llvm::BasicBlock::Create(
+        ownedPairContext, "resource.null", ownedCleanupTransfer);
+    auto* ownedCleanupFailure = llvm::BasicBlock::Create(
+        ownedPairContext, "resource.injected.failure", ownedCleanupTransfer);
+    auto* ownedCleanupCommit = llvm::BasicBlock::Create(
+        ownedPairContext, "resource.commit", ownedCleanupTransfer);
+    ownedPairBuilder.SetInsertPoint(ownedCleanupStart);
+    auto* ownedCleanupBodyCall = ownedPairBuilder.CreateCall(
+        ownedCleanupBody, {ownedCleanupTransfer->getArg(0),
+                           ownedCleanupTransfer->getArg(1)});
+    ownedPairBuilder.CreateBr(ownedCleanupResource);
+    ownedPairBuilder.SetInsertPoint(ownedCleanupResource);
+    auto* ownedCleanupOwner = ownedPairBuilder.CreateIntToPtr(
+        ownedPairBuilder.CreateExtractValue(ownedCleanupBodyCall, {1, 0}),
+        ownedPairPtr);
+    ownedPairBuilder.CreateCondBr(
+        ownedPairBuilder.CreateIsNotNull(ownedCleanupOwner),
+        ownedCleanupValid, ownedCleanupNull);
+    ownedPairBuilder.SetInsertPoint(ownedCleanupNull);
+    ownedPairBuilder.CreateRet(llvm::ConstantInt::get(ownedPairI32,
+        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_RESOURCE_V1_TEST));
+    ownedPairBuilder.SetInsertPoint(ownedCleanupValid);
+    auto* ownedCleanupInjection = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateICmpNE(ownedCleanupTransfer->getArg(5),
+            llvm::ConstantInt::get(ownedPairI32, 0)));
+    ownedPairBuilder.CreateCondBr(ownedCleanupInjection,
+                                  ownedCleanupFailure, ownedCleanupCommit);
+    auto* ownedCleanupDrop = llvm::Function::Create(
+        llvm::FunctionType::get(llvm::Type::getVoidTy(ownedPairContext),
+            {ownedPairPtr}, false),
+        llvm::Function::ExternalLinkage,
+        "luna_native_owned_cleanup_drop", ownedPairModule);
+    auto* ownedCleanupDealloc = llvm::Function::Create(
+        llvm::FunctionType::get(llvm::Type::getVoidTy(ownedPairContext),
+            {ownedPairPtr, ownedPairSize, ownedPairSize}, false),
+        llvm::Function::ExternalLinkage, "rt_dealloc", ownedPairModule);
+    ownedPairBuilder.SetInsertPoint(ownedCleanupFailure);
+    auto* ownedCleanupDropCall = ownedPairBuilder.CreateCall(
+        ownedCleanupDrop, {ownedCleanupOwner});
+    auto* ownedCleanupDeallocCall = ownedPairBuilder.CreateCall(
+        ownedCleanupDealloc, {ownedCleanupOwner,
+            llvm::ConstantInt::get(ownedPairSize, 4),
+            llvm::ConstantInt::get(ownedPairSize, 4)});
+    auto* ownedCleanupFailureReturn = ownedPairBuilder.CreateRet(
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST));
+    ownedPairBuilder.SetInsertPoint(ownedCleanupCommit);
+    ownedPairBuilder.CreateRet(llvm::ConstantInt::get(ownedPairI32, 0));
+    luna::codegen::NativeOwnedResultSourceFacts ownedCleanupFacts;
+    ownedCleanupFacts.sourceLinkageName = ownedCleanupBody->getName().str();
+    ownedCleanupFacts.errorValueSize = sizeof(void*);
+    ownedCleanupFacts.errorValueAlignment = alignof(void*);
+    const std::vector<std::string> ownedCleanupCalls = {
+        ownedCleanupDrop->getName().str(), "rt_dealloc"};
+    const auto verifyOwnedCleanup = [&] {
+        return luna::codegen::verifyNativeOwnedResultTransferInjectedCleanup(
+            ownedPairModule, ownedCleanupTransfer->getName().str(),
+            ownedCleanupFacts, ownedCleanupCalls, 4, 4,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_RESOURCE_V1_TEST,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST,
+            ownedSourceError);
+    };
+    if (!verifyOwnedCleanup())
+        return fail("Native v3 transfer lost injected owner cleanup");
+    ownedCleanupDropCall->setArgOperand(0, ownedCleanupTransfer->getArg(4));
+    const bool acceptedWrongCleanupOwner = verifyOwnedCleanup();
+    ownedCleanupDropCall->setArgOperand(0, ownedCleanupOwner);
+    ownedCleanupDeallocCall->setArgOperand(1,
+        llvm::ConstantInt::get(ownedPairSize, 1));
+    const bool acceptedWrongCleanupSize = verifyOwnedCleanup();
+    ownedCleanupDeallocCall->setArgOperand(1,
+        llvm::ConstantInt::get(ownedPairSize, 4));
+    ownedCleanupDeallocCall->setArgOperand(2,
+        llvm::ConstantInt::get(ownedPairSize, 1));
+    const bool acceptedWrongCleanupAlignment = verifyOwnedCleanup();
+    ownedCleanupDeallocCall->setArgOperand(2,
+        llvm::ConstantInt::get(ownedPairSize, 4));
+    ownedCleanupDeallocCall->setArgOperand(0,
+        ownedCleanupTransfer->getArg(4));
+    const bool acceptedWrongDeallocationOwner = verifyOwnedCleanup();
+    ownedCleanupDeallocCall->setArgOperand(0, ownedCleanupOwner);
+    ownedCleanupInjection->setPredicate(llvm::ICmpInst::ICMP_EQ);
+    const bool acceptedInvertedCleanupGate = verifyOwnedCleanup();
+    ownedCleanupInjection->setPredicate(llvm::ICmpInst::ICMP_NE);
+    ownedCleanupFailureReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    const bool acceptedWrongCleanupStatus = verifyOwnedCleanup();
+    ownedCleanupFailureReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST));
+    llvm::IRBuilder<> ownedEarlyWriteBuilder(ownedCleanupFailureReturn);
+    auto* ownedEarlyWrite = ownedEarlyWriteBuilder.CreateStore(
+        llvm::ConstantInt::get(ownedPairI32, 1),
+        ownedCleanupTransfer->getArg(2));
+    const bool acceptedEarlyOutputWrite = verifyOwnedCleanup();
+    ownedEarlyWrite->eraseFromParent();
+    if (acceptedWrongCleanupOwner || acceptedWrongCleanupSize ||
+        acceptedWrongCleanupAlignment ||
+        acceptedWrongDeallocationOwner ||
+        acceptedInvertedCleanupGate || acceptedWrongCleanupStatus ||
+        acceptedEarlyOutputWrite || !verifyOwnedCleanup())
+        return fail("Native v3 transfer accepted altered injected cleanup");
     auto mutableOwnedError = std::find_if(
         tryApplyModule->typeTable.begin(), tryApplyModule->typeTable.end(),
         [&](const moon::TypeRecord& type) {

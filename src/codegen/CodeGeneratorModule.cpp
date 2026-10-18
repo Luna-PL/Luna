@@ -2632,6 +2632,15 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     failure = "private Ref Result transfer lost preflight or one body call";
                     return false;
                 }
+                if (privateOwnedResultFacts &&
+                    !luna::codegen::verifyNativeOwnedResultTransferInjectedCleanup(
+                        *proof.mModule, transfer->getName().str(),
+                        *privateOwnedResultFacts, expectedDropCalls,
+                        typeSize(resourceType), typeAlignment(resourceType),
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_RESOURCE_V1_TEST,
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST,
+                        failure))
+                    return false;
                 dropBuilder.SetInsertPoint(cleanupEnd);
                 dropBuilder.CreateRet(llvm::ConstantInt::get(i32Ty, 0));
                 if (privateOwnedResultFacts) {

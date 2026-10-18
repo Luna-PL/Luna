@@ -1687,7 +1687,7 @@ the loaded owner, exact generated Drop entry, lease and caller's owner cell.
 Only its successful status reaches the identified final tag-store block; the
 failure edge drops that same local owner cell and returns status `8`. The
 private JIT path runs this check and rejects altered lease, branch, Drop,
-failure status or tag destination. Transfer-body failure cleanup and the full
+failure status or tag destination. Complete transfer-body failure cleanup and the full
 host status graph still need independent production proof.
 The producer-side transfer-fork check also requires one call with the original
 parent and Ref, distinct local tag/scalar/owner scratch cells, a null-initialized
@@ -1707,6 +1707,15 @@ Three pairwise address-gap checks now bind the tag/scalar, tag/owner and
 scalar/owner regions to their generated ABI sizes. Together these checks prove
 that the entry success edge satisfies output validity before the owner-cell
 load.
+An independent producer-side check now covers the private transfer's injected
+owned-error failure after body dispatch. It traces the returned owner through
+the non-null and injection gates, checks the source-derived Drop call order,
+binds root Drop and `rt_dealloc` to that owner and the physical allocation
+size/alignment, rejects direct output-cell writes in the cleanup block, and
+requires status `3`.
+The descriptor's error-value layout describes its pointer carrier, which can
+differ from the heap allocation layout. Other transfer failures and the full
+host status graph remain separate proof work.
 
 The private generated transfer entry now consumes those source facts for the
 candidate owned-error shape and checks its emitted C calling convention,
