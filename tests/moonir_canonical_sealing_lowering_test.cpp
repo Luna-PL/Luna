@@ -5611,6 +5611,20 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "luna_native_owned_cleanup_transfer", ownedPairModule);
     auto* ownedCleanupStart = llvm::BasicBlock::Create(
         ownedPairContext, "entry", ownedCleanupTransfer);
+    auto* ownedCleanupContext = llvm::BasicBlock::Create(
+        ownedPairContext, "check.context", ownedCleanupTransfer);
+    auto* ownedCleanupRef = llvm::BasicBlock::Create(
+        ownedPairContext, "check.ref", ownedCleanupTransfer);
+    auto* ownedCleanupInvalidContext = llvm::BasicBlock::Create(
+        ownedPairContext, "context.invalid", ownedCleanupTransfer);
+    auto* ownedCleanupInvalidHandle = llvm::BasicBlock::Create(
+        ownedPairContext, "ref.invalid.handle", ownedCleanupTransfer);
+    auto* ownedCleanupInvalidTarget = llvm::BasicBlock::Create(
+        ownedPairContext, "ref.invalid.target", ownedCleanupTransfer);
+    auto* ownedCleanupUnexpected = llvm::BasicBlock::Create(
+        ownedPairContext, "check.unexpected", ownedCleanupTransfer);
+    auto* ownedCleanupBodyDispatch = llvm::BasicBlock::Create(
+        ownedPairContext, "call.body", ownedCleanupTransfer);
     auto* ownedCleanupScalar = llvm::BasicBlock::Create(
         ownedPairContext, "scalar", ownedCleanupTransfer);
     auto* ownedCleanupScalarFailure = llvm::BasicBlock::Create(
@@ -5628,6 +5642,60 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto* ownedCleanupCommit = llvm::BasicBlock::Create(
         ownedPairContext, "resource.commit", ownedCleanupTransfer);
     ownedPairBuilder.SetInsertPoint(ownedCleanupStart);
+    ownedPairBuilder.CreateBr(ownedCleanupContext);
+    auto ownedCleanupContextFunction = ownedPairModule.getOrInsertFunction(
+        "luna_compiler_fragment_context_check", ownedPairI32,
+        ownedPairPtr);
+    ownedPairBuilder.SetInsertPoint(ownedCleanupContext);
+    auto* ownedCleanupContextCall = ownedPairBuilder.CreateCall(
+        ownedCleanupContextFunction, {ownedCleanupTransfer->getArg(0)});
+    auto* ownedCleanupContextSwitch = ownedPairBuilder.CreateSwitch(
+        ownedCleanupContextCall, ownedCleanupUnexpected, 2);
+    auto* ownedCleanupStatusType = llvm::cast<llvm::IntegerType>(ownedPairI32);
+    ownedCleanupContextSwitch->addCase(llvm::ConstantInt::getSigned(
+        ownedCleanupStatusType, LUNA_COMPILER_FRAGMENT_OVERRIDE_SUCCESS),
+        ownedCleanupRef);
+    ownedCleanupContextSwitch->addCase(llvm::ConstantInt::getSigned(
+        ownedCleanupStatusType,
+        LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_CONTEXT),
+        ownedCleanupInvalidContext);
+    auto ownedCleanupRefFunction = ownedPairModule.getOrInsertFunction(
+        "luna_runtime_fragment_ref_check_v1", ownedPairI32,
+        ownedPairPtr, ownedPairPtr, ownedPairPtr);
+    ownedPairBuilder.SetInsertPoint(ownedCleanupRef);
+    auto* ownedCleanupRefCall = ownedPairBuilder.CreateCall(
+        ownedCleanupRefFunction,
+        {ownedCleanupTransfer->getArg(1),
+         ownedPairBuilder.CreateGlobalString("sealed.slot"),
+         ownedPairBuilder.CreateGlobalString("sealed.contract")});
+    auto* ownedCleanupRefSwitch = ownedPairBuilder.CreateSwitch(
+        ownedCleanupRefCall, ownedCleanupUnexpected, 3);
+    ownedCleanupRefSwitch->addCase(llvm::ConstantInt::getSigned(
+        ownedCleanupStatusType, LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1),
+        ownedCleanupBodyDispatch);
+    ownedCleanupRefSwitch->addCase(llvm::ConstantInt::getSigned(
+        ownedCleanupStatusType, LUNA_RUNTIME_FRAGMENT_REF_INVALID_HANDLE_V1),
+        ownedCleanupInvalidHandle);
+    ownedCleanupRefSwitch->addCase(llvm::ConstantInt::getSigned(
+        ownedCleanupStatusType, LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1),
+        ownedCleanupInvalidTarget);
+    ownedPairBuilder.SetInsertPoint(ownedCleanupInvalidContext);
+    auto* ownedCleanupInvalidContextReturn = ownedPairBuilder.CreateRet(
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_CONTEXT_V1_TEST));
+    ownedPairBuilder.SetInsertPoint(ownedCleanupInvalidHandle);
+    auto* ownedCleanupInvalidHandleReturn = ownedPairBuilder.CreateRet(
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_HANDLE_V1_TEST));
+    ownedPairBuilder.SetInsertPoint(ownedCleanupInvalidTarget);
+    auto* ownedCleanupInvalidTargetReturn = ownedPairBuilder.CreateRet(
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST));
+    ownedPairBuilder.SetInsertPoint(ownedCleanupUnexpected);
+    auto* ownedCleanupUnexpectedReturn = ownedPairBuilder.CreateRet(
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST));
+    ownedPairBuilder.SetInsertPoint(ownedCleanupBodyDispatch);
     auto* ownedCleanupBodyCall = ownedPairBuilder.CreateCall(
         ownedCleanupBody, {ownedCleanupTransfer->getArg(0),
                            ownedCleanupTransfer->getArg(1)});
@@ -5702,6 +5770,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         llvm::ConstantInt::get(ownedPairI32, 0));
     luna::codegen::NativeOwnedResultSourceFacts ownedCleanupFacts;
     ownedCleanupFacts.sourceLinkageName = ownedCleanupBody->getName().str();
+    ownedCleanupFacts.refSlotSymbolId = "sealed.slot";
+    ownedCleanupFacts.refSlotContractId = "sealed.contract";
     ownedCleanupFacts.errorValueSize = sizeof(void*);
     ownedCleanupFacts.errorValueAlignment = alignof(void*);
     const std::vector<std::string> ownedCleanupCalls = {
@@ -5867,6 +5937,86 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         acceptedWrongResourceCell || acceptedWrongResourceSuccess ||
         acceptedResourceScalarWrite || !verifyResourceCommit())
         return fail("Native v3 transfer accepted altered resource commit");
+    const auto verifyContextRefPreflight = [&] {
+        return luna::codegen::verifyNativeOwnedResultTransferContextRefPreflight(
+            ownedPairModule, ownedCleanupTransfer->getName().str(),
+            ownedCleanupFacts,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_CONTEXT_V1_TEST,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_HANDLE_V1_TEST,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST,
+            ownedSourceError);
+    };
+    if (!verifyContextRefPreflight())
+        return fail("Native v3 transfer lost context/Ref preflight");
+    ownedCleanupContextCall->setArgOperand(0,
+        ownedCleanupTransfer->getArg(1));
+    const bool acceptedWrongContextInput = verifyContextRefPreflight();
+    ownedCleanupContextCall->setArgOperand(0,
+        ownedCleanupTransfer->getArg(0));
+    ownedCleanupRefCall->setArgOperand(0,
+        ownedCleanupTransfer->getArg(0));
+    const bool acceptedWrongRefInput = verifyContextRefPreflight();
+    ownedCleanupRefCall->setArgOperand(0,
+        ownedCleanupTransfer->getArg(1));
+    llvm::IRBuilder<> wrongRefIdentityBuilder(ownedCleanupRefCall);
+    auto* wrongSlot = wrongRefIdentityBuilder.CreateGlobalString(
+        "forged.slot");
+    auto* frozenSlot = ownedCleanupRefCall->getArgOperand(1);
+    ownedCleanupRefCall->setArgOperand(1, wrongSlot);
+    const bool acceptedWrongRefSlot = verifyContextRefPreflight();
+    ownedCleanupRefCall->setArgOperand(1, frozenSlot);
+    auto* wrongContract = wrongRefIdentityBuilder.CreateGlobalString(
+        "forged.contract");
+    auto* frozenContract = ownedCleanupRefCall->getArgOperand(2);
+    ownedCleanupRefCall->setArgOperand(2, wrongContract);
+    const bool acceptedWrongRefContract = verifyContextRefPreflight();
+    ownedCleanupRefCall->setArgOperand(2, frozenContract);
+    ownedCleanupBodyCall->setArgOperand(0,
+        ownedCleanupTransfer->getArg(1));
+    const bool acceptedWrongBodyInput = verifyContextRefPreflight();
+    ownedCleanupBodyCall->setArgOperand(0,
+        ownedCleanupTransfer->getArg(0));
+    ownedCleanupInvalidContextReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    const bool acceptedWrongContextStatus = verifyContextRefPreflight();
+    ownedCleanupInvalidContextReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_CONTEXT_V1_TEST));
+    ownedCleanupInvalidHandleReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    const bool acceptedWrongHandleStatus = verifyContextRefPreflight();
+    ownedCleanupInvalidHandleReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_HANDLE_V1_TEST));
+    ownedCleanupInvalidTargetReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    const bool acceptedWrongTargetStatus = verifyContextRefPreflight();
+    ownedCleanupInvalidTargetReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST));
+    ownedCleanupUnexpectedReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    const bool acceptedWrongUnexpectedStatus = verifyContextRefPreflight();
+    ownedCleanupUnexpectedReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST));
+    ownedCleanupRefSwitch->setDefaultDest(ownedCleanupInvalidHandle);
+    const bool acceptedWrongRefDefault = verifyContextRefPreflight();
+    ownedCleanupRefSwitch->setDefaultDest(ownedCleanupUnexpected);
+    llvm::IRBuilder<> preflightWriteBuilder(ownedCleanupInvalidHandleReturn);
+    auto* preflightWrite = preflightWriteBuilder.CreateStore(
+        llvm::ConstantInt::get(ownedPairI32, 1),
+        ownedCleanupTransfer->getArg(2));
+    const bool acceptedPreflightOutputWrite = verifyContextRefPreflight();
+    preflightWrite->eraseFromParent();
+    if (acceptedWrongContextInput || acceptedWrongRefInput ||
+        acceptedWrongRefSlot || acceptedWrongRefContract ||
+        acceptedWrongBodyInput || acceptedWrongContextStatus ||
+        acceptedWrongHandleStatus || acceptedWrongTargetStatus ||
+        acceptedWrongUnexpectedStatus || acceptedWrongRefDefault ||
+        acceptedPreflightOutputWrite || !verifyContextRefPreflight())
+        return fail("Native v3 transfer accepted altered context/Ref preflight");
     auto mutableOwnedError = std::find_if(
         tryApplyModule->typeTable.begin(), tryApplyModule->typeTable.end(),
         [&](const moon::TypeRecord& type) {

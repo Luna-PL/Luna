@@ -157,4 +157,13 @@ bool verifyNativeOwnedResultTransferResourceCommit(
     const NativeOwnedResultSourceFacts& source,
     uint32_t successStatus, std::string& error);
 
+// Checks the context and exact borrowed-Ref status switches before the one
+// source-body call. Entry output and owner-cell gates are separate proof work.
+bool verifyNativeOwnedResultTransferContextRefPreflight(
+    const llvm::Module& generated, const std::string& transferLinkageName,
+    const NativeOwnedResultSourceFacts& source,
+    uint32_t invalidContextStatus, uint32_t invalidHandleStatus,
+    uint32_t invalidTargetStatus, uint32_t unexpectedStatus,
+    std::string& error);
+
 } // namespace luna::codegen

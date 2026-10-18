@@ -6,10 +6,13 @@
 #include "moonir/FragmentContextEffects.h"
 #include "moonir/MoonIRModule.h"
 #include "moonir/Verifier.h"
+#include "runtime/RuntimeFragmentABI.h"
+#include "runtime/RuntimeFragmentCompilerBridge.h"
 #include "runtime/RuntimeOwnedResult.h"
 
 #include <llvm/IR/CFG.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
 
@@ -1296,6 +1299,149 @@ bool verifyNativeOwnedResultTransferResourceCommit(
         !status || status->getBitWidth() != 32 ||
         status->getZExtValue() != successStatus)
         return reject("Native v3 resource commit changed tag, owner or status");
+    error.clear();
+    return true;
+}
+
+bool verifyNativeOwnedResultTransferContextRefPreflight(
+    const llvm::Module& generated, const std::string& transferLinkageName,
+    const NativeOwnedResultSourceFacts& source,
+    uint32_t invalidContextStatus, uint32_t invalidHandleStatus,
+    uint32_t invalidTargetStatus, uint32_t unexpectedStatus,
+    std::string& error) {
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    const auto* transfer = generated.getFunction(transferLinkageName);
+    const auto* body = generated.getFunction(source.sourceLinkageName);
+    if (!transfer || transfer->isDeclaration() || transfer->isVarArg() ||
+        transfer->getCallingConv() != llvm::CallingConv::C ||
+        !transfer->getReturnType()->isIntegerTy(32) ||
+        transfer->arg_size() != 6 || !transfer->hasExternalLinkage() ||
+        !body || body->isDeclaration() || !body->hasInternalLinkage() ||
+        !boundedIdentity(source.refSlotSymbolId) ||
+        !boundedIdentity(source.refSlotContractId))
+        return reject("Native v3 transfer preflight lacks source identities");
+    for (unsigned index = 0; index < 5; ++index)
+        if (!transfer->getArg(index)->getType()->isPointerTy() ||
+            transfer->getArg(index)->getType()->getPointerAddressSpace() != 0)
+            return reject("Native v3 transfer preflight changed a pointer parameter");
+    if (!transfer->getArg(5)->getType()->isIntegerTy(32))
+        return reject("Native v3 transfer preflight changed injection type");
+    const llvm::CallInst* contextCall = nullptr;
+    const llvm::CallInst* refCall = nullptr;
+    const llvm::CallInst* bodyCall = nullptr;
+    for (const auto& block : *transfer)
+        for (const auto& instruction : block)
+            if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                    &instruction)) {
+                const auto* callee = call->getCalledFunction();
+                if (!callee) continue;
+                if (callee->getName() ==
+                        "luna_compiler_fragment_context_check") {
+                    if (contextCall) return reject(
+                        "Native v3 transfer checks context twice");
+                    contextCall = call;
+                } else if (callee->getName() ==
+                        "luna_runtime_fragment_ref_check_v1") {
+                    if (refCall) return reject(
+                        "Native v3 transfer checks Ref twice");
+                    refCall = call;
+                } else if (callee == body) {
+                    if (bodyCall) return reject(
+                        "Native v3 transfer calls the body twice");
+                    bodyCall = call;
+                }
+            }
+    const auto validCheck = [](const llvm::CallInst* call,
+                               unsigned argumentCount) {
+        const auto* callee = call ? call->getCalledFunction() : nullptr;
+        return callee && callee->isDeclaration() && !callee->isVarArg() &&
+            callee->getCallingConv() == llvm::CallingConv::C &&
+            callee->getReturnType()->isIntegerTy(32) &&
+            callee->arg_size() == argumentCount &&
+            call->getCallingConv() == llvm::CallingConv::C &&
+            call->arg_size() == argumentCount;
+    };
+    if (!validCheck(contextCall, 1) || !validCheck(refCall, 3) ||
+        !bodyCall || contextCall->getArgOperand(0) != transfer->getArg(0) ||
+        refCall->getArgOperand(0) != transfer->getArg(1) ||
+        bodyCall->arg_size() != 2 ||
+        bodyCall->getArgOperand(0) != transfer->getArg(0) ||
+        bodyCall->getArgOperand(1) != transfer->getArg(1))
+        return reject("Native v3 transfer preflight changed borrowed inputs");
+    const auto matchesFrozenString = [](const llvm::Value* pointer,
+                                        const std::string& expected) {
+        const auto* global = llvm::dyn_cast<llvm::GlobalVariable>(
+            pointer->stripPointerCasts());
+        const auto* bytes = global && global->isConstant() &&
+            global->hasInitializer()
+            ? llvm::dyn_cast<llvm::ConstantDataArray>(
+                global->getInitializer()) : nullptr;
+        return bytes && bytes->isCString() &&
+            bytes->getAsCString().str() == expected;
+    };
+    if (!matchesFrozenString(refCall->getArgOperand(1),
+            source.refSlotSymbolId) ||
+        !matchesFrozenString(refCall->getArgOperand(2),
+            source.refSlotContractId))
+        return reject("Native v3 transfer preflight changed Ref target");
+    const auto* context = contextCall->getParent();
+    const auto* contextSwitch = llvm::dyn_cast<llvm::SwitchInst>(
+        context->getTerminator());
+    const auto* checkedRef = refCall->getParent();
+    const auto* refSwitch = llvm::dyn_cast<llvm::SwitchInst>(
+        checkedRef->getTerminator());
+    if (!contextSwitch || context->size() != 2 ||
+        contextSwitch->getCondition() != contextCall ||
+        contextSwitch->getNumCases() != 2 ||
+        !refSwitch || checkedRef->size() != 2 ||
+        refSwitch->getCondition() != refCall ||
+        refSwitch->getNumCases() != 3 ||
+        std::distance(llvm::pred_begin(checkedRef),
+                      llvm::pred_end(checkedRef)) != 1 ||
+        *llvm::pred_begin(checkedRef) != context)
+        return reject("Native v3 transfer preflight lost ordered checks");
+    const auto caseTarget = [](const llvm::SwitchInst* branch,
+                               int64_t value) -> const llvm::BasicBlock* {
+        for (const auto& item : branch->cases())
+            if (item.getCaseValue()->getSExtValue() == value)
+                return item.getCaseSuccessor();
+        return nullptr;
+    };
+    const auto statusBlock = [](const llvm::BasicBlock* block,
+                                uint32_t expected) {
+        const auto* returned = block && block->size() == 1
+            ? llvm::dyn_cast<llvm::ReturnInst>(
+                block->getTerminator()) : nullptr;
+        const auto* status = returned
+            ? llvm::dyn_cast_or_null<llvm::ConstantInt>(
+                returned->getReturnValue()) : nullptr;
+        return status && status->getBitWidth() == 32 &&
+            status->getZExtValue() == expected;
+    };
+    const auto* unexpected = contextSwitch->getDefaultDest();
+    const auto* bodyBlock = bodyCall->getParent();
+    if (caseTarget(contextSwitch,
+            LUNA_COMPILER_FRAGMENT_OVERRIDE_SUCCESS) != checkedRef ||
+        !statusBlock(caseTarget(contextSwitch,
+            LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_CONTEXT),
+            invalidContextStatus) ||
+        refSwitch->getDefaultDest() != unexpected ||
+        !statusBlock(unexpected, unexpectedStatus) ||
+        caseTarget(refSwitch, LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1) !=
+            bodyBlock ||
+        !statusBlock(caseTarget(refSwitch,
+            LUNA_RUNTIME_FRAGMENT_REF_INVALID_HANDLE_V1),
+            invalidHandleStatus) ||
+        !statusBlock(caseTarget(refSwitch,
+            LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1),
+            invalidTargetStatus) ||
+        std::distance(llvm::pred_begin(bodyBlock),
+                      llvm::pred_end(bodyBlock)) != 1 ||
+        *llvm::pred_begin(bodyBlock) != checkedRef)
+        return reject("Native v3 transfer preflight changed status routing");
     error.clear();
     return true;
 }

@@ -1285,8 +1285,11 @@ scalar／owner 的生成 ABI 大小。这些校验共同证明入口成功边在
 至标量 Ok 分支，要求注入失败不写输出并返回状态 `3`，成功时把标签 `1` 与从
 同一 body 结果提取的标量写出，再返回状态 `0`。resource 提交校验现将 body
 标签 `0` 绑定至 owned Err 分支，要求 owner 非空且注入参数为零，成功时写出
-标签 `0` 与同一个返回 owner，再返回状态 `0`。transfer 的预检失败及宿主完整
-状态图仍需分别证明。
+标签 `0` 与同一个返回 owner，再返回状态 `0`。transfer 的 context／Ref 预检
+校验现绑定原始 parent、借用 Ref、冻结的 Slot／Contract 字符串及精确的 Runtime
+状态分派。失败块不写输出并返回状态 `4` 至 `7`，源码 body 只能从 Ref 检查的
+成功边进入。transfer 入口的输出与 owner cell 门禁以及宿主完整状态图仍需分别
+证明。
 
 私有生成的 transfer 入口现对候选拥有型 Err 形态消费这些源码事实，核对生成的 C
 调用约定、参数数目、返回类型、源码 linkage 及错误类型。它的六个参数依次是

@@ -1721,8 +1721,12 @@ write tag `1` and the scalar extracted from that body result before status
 `0`. A resource-commit check now binds body tag `0` to the owned Err arm,
 requires a non-null owner and zero injection before commit, and checks that
 success writes tag `0` and exactly that returned owner before status `0`.
-Transfer preflight failures and the full host status graph remain separate
-proof work.
+The transfer's context/Ref preflight check now requires the original parent
+and borrowed Ref, frozen Slot/Contract strings and exact Runtime status
+switches. Its failure blocks return statuses `4` through `7` without output
+writes, while the source body has only the successful Ref-check predecessor.
+The transfer entry's output and owner-cell gates and the full host status
+graph remain separate proof work.
 
 The private generated transfer entry now consumes those source facts for the
 candidate owned-error shape and checks its emitted C calling convention,
