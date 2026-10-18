@@ -112,6 +112,14 @@ bool verifyNativeOwnedResultHostScalarCommit(
     const llvm::Module& generated, const std::string& hostLinkageName,
     const std::string& transferLinkageName, std::string& error);
 
+// Proves the resource tag's non-null owner gate and zero-injection path to
+// adoption, plus both invalid-resource paths. A present invalid owner is
+// dropped from the transfer's local owner cell before status 2 is returned.
+bool verifyNativeOwnedResultHostResourceValidation(
+    const llvm::Module& generated, const std::string& hostLinkageName,
+    const std::string& transferLinkageName,
+    const std::string& dropLinkageName, std::string& error);
+
 // Proves that transfer is reachable only through the caller owner-cell-empty
 // check and the Runtime code-lease-live check. Both failed gates return their
 // versioned status. The preceding output validity expression is separate.

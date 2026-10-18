@@ -1699,8 +1699,17 @@ it loads the tag and owner from the transfer scratch cells, dispatches tag
 a null owner. That commit loads the same scalar scratch, writes the caller's
 scalar and tag cells in order, and returns status `0`. Mutation probes reject
 changed dispatch, owner gate, scratch, output destination and status. The
-invalid-resource continuation and full host status graph remain separate
-proof work.
+invalid-resource continuation is checked below; the full host status graph
+remains separate proof work.
+The host resource-validation check now binds the tag `0` arm to a non-null
+owner test, the zero-injection gate and the exact adoption call. Its success
+tag comes from the transfer scratch. A null resource owner returns status
+`2`; an invalid scalar-side result with a non-null owner first calls the
+generated Drop on that same local owner cell, then returns status `2`.
+The shared invalid-status block has only those three expected predecessors
+and writes no caller output. Mutation probes cover the owner gates, adoption
+ingress, Drop cell, tag source and status. Other host control-flow properties
+still require separate proof.
 Output preflight is checked separately below; cleanup inside the transfer body
 remains unproved by these host checks.
 The producer-side owner/lease gate check now binds the caller owner-cell load

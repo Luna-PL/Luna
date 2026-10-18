@@ -5278,6 +5278,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         ownedPairContext, "scalar.commit", ownedPairHost);
     auto* ownedHostAdopt = llvm::BasicBlock::Create(
         ownedPairContext, "resource.adopt", ownedPairHost);
+    auto* ownedHostAdoptCheck = llvm::BasicBlock::Create(
+        ownedPairContext, "resource.adopt.check", ownedPairHost);
     auto* ownedHostInvalidResourceCheck = llvm::BasicBlock::Create(
         ownedPairContext, "resource.invalid.check", ownedPairHost);
     auto* ownedHostInvalidResourceDrop = llvm::BasicBlock::Create(
@@ -5426,10 +5428,17 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto* ownedScalarReturn = ownedPairBuilder.CreateRet(
         llvm::ConstantInt::get(ownedPairI32, 0));
     ownedPairBuilder.SetInsertPoint(ownedHostResource);
-    ownedPairBuilder.CreateCondBr(
-        ownedPairBuilder.CreateIsNotNull(ownedHostValue),
-        ownedHostAdopt, ownedHostInvalidResource);
+    auto* ownedResourceOwnerCheck = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateIsNotNull(ownedHostValue));
+    auto* ownedResourceBranch = ownedPairBuilder.CreateCondBr(
+        ownedResourceOwnerCheck, ownedHostAdopt, ownedHostInvalidResource);
     ownedPairBuilder.SetInsertPoint(ownedHostAdopt);
+    auto* ownedInjectionCheck = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateICmpEQ(ownedPairHost->getArg(6),
+            llvm::ConstantInt::get(ownedPairI32, 0)));
+    auto* ownedInjectionBranch = ownedPairBuilder.CreateCondBr(
+        ownedInjectionCheck, ownedHostAdoptCheck, ownedHostFailed);
+    ownedPairBuilder.SetInsertPoint(ownedHostAdoptCheck);
     auto* ownedAdoptionCall = ownedPairBuilder.CreateCall(
         ownedPairAdoption, {ownedHostValue, ownedPairDrop,
                             ownedPairHost->getArg(5), ownedPairHost->getArg(4)});
@@ -5443,15 +5452,19 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         ownedHostTagValue, ownedPairHost->getArg(2));
     ownedPairBuilder.CreateRet(llvm::ConstantInt::get(ownedPairI32, 0));
     ownedPairBuilder.SetInsertPoint(ownedHostInvalidResourceCheck);
-    ownedPairBuilder.CreateCondBr(
-        ownedPairBuilder.CreateIsNotNull(ownedHostValue),
-        ownedHostInvalidResourceDrop, ownedHostInvalidResource);
+    auto* ownedInvalidOwnerCheck = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateIsNotNull(ownedHostValue));
+    auto* ownedInvalidBranch = ownedPairBuilder.CreateCondBr(
+        ownedInvalidOwnerCheck, ownedHostInvalidResourceDrop,
+        ownedHostInvalidResource);
     ownedPairBuilder.SetInsertPoint(ownedHostInvalidResourceDrop);
-    ownedPairBuilder.CreateCall(ownedPairDrop, {ownedHostCell});
+    auto* ownedInvalidDrop = ownedPairBuilder.CreateCall(
+        ownedPairDrop, {ownedHostCell});
     ownedPairBuilder.CreateBr(ownedHostInvalidResource);
     ownedPairBuilder.SetInsertPoint(ownedHostInvalidResource);
-    ownedPairBuilder.CreateRet(llvm::ConstantInt::get(ownedPairI32,
-        LUNA_NATIVE_REF_RESULT_OWNER_INVALID_RESOURCE_V1));
+    auto* ownedInvalidResourceReturn = ownedPairBuilder.CreateRet(
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_NATIVE_REF_RESULT_OWNER_INVALID_RESOURCE_V1));
     ownedPairBuilder.SetInsertPoint(ownedHostFailed);
     auto* ownedFailedDrop = ownedPairBuilder.CreateCall(
         ownedPairDrop, {ownedHostCell});
@@ -5566,6 +5579,63 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         acceptedWrongScalarTagOutput || acceptedWrongScalarStatus ||
         !verifyOwnedScalarCommit())
         return fail("Native v3 host accepted altered scalar commit");
+    const auto verifyOwnedResourceValidation = [&] {
+        return luna::codegen::verifyNativeOwnedResultHostResourceValidation(
+            ownedPairModule, ownedPairHost->getName().str(),
+            ownedPairTransfer->getName().str(),
+            ownedPairDrop->getName().str(), ownedSourceError);
+    };
+    if (!verifyOwnedResourceValidation())
+        return fail((std::string("Native v3 host lost its resource validation: ") +
+                    ownedSourceError).c_str());
+    ownedResourceOwnerCheck->setPredicate(llvm::ICmpInst::ICMP_EQ);
+    const bool acceptedNullResourceOwner = verifyOwnedResourceValidation();
+    ownedResourceOwnerCheck->setPredicate(llvm::ICmpInst::ICMP_NE);
+    ownedResourceOwnerCheck->setOperand(0, ownedPairHost->getArg(4));
+    const bool acceptedWrongResourceOwner = verifyOwnedResourceValidation();
+    ownedResourceOwnerCheck->setOperand(0, ownedHostValue);
+    ownedResourceBranch->setSuccessor(0, ownedHostInvalidResource);
+    ownedResourceBranch->setSuccessor(1, ownedHostAdopt);
+    const bool acceptedInvertedResourceGate = verifyOwnedResourceValidation();
+    ownedResourceBranch->setSuccessor(0, ownedHostAdopt);
+    ownedResourceBranch->setSuccessor(1, ownedHostInvalidResource);
+    ownedInjectionCheck->setOperand(1,
+        llvm::ConstantInt::get(ownedPairI32, 1));
+    const bool acceptedEnabledInjection = verifyOwnedResourceValidation();
+    ownedInjectionCheck->setOperand(1,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    ownedInjectionBranch->setSuccessor(0, ownedHostFailed);
+    ownedInjectionBranch->setSuccessor(1, ownedHostAdoptCheck);
+    const bool acceptedInvertedAdoptionGate = verifyOwnedResourceValidation();
+    ownedInjectionBranch->setSuccessor(0, ownedHostAdoptCheck);
+    ownedInjectionBranch->setSuccessor(1, ownedHostFailed);
+    ownedTagCommit->setOperand(0, ownedScalarValue);
+    const bool acceptedWrongHostResourceTag = verifyOwnedResourceValidation();
+    ownedTagCommit->setOperand(0, ownedHostTagValue);
+    ownedInvalidOwnerCheck->setPredicate(llvm::ICmpInst::ICMP_EQ);
+    const bool acceptedNullInvalidOwner = verifyOwnedResourceValidation();
+    ownedInvalidOwnerCheck->setPredicate(llvm::ICmpInst::ICMP_NE);
+    ownedInvalidBranch->setSuccessor(0, ownedHostInvalidResource);
+    ownedInvalidBranch->setSuccessor(1, ownedHostInvalidResourceDrop);
+    const bool acceptedInvertedInvalidDrop = verifyOwnedResourceValidation();
+    ownedInvalidBranch->setSuccessor(0, ownedHostInvalidResourceDrop);
+    ownedInvalidBranch->setSuccessor(1, ownedHostInvalidResource);
+    ownedInvalidDrop->setArgOperand(0, ownedHostTag);
+    const bool acceptedWrongInvalidDropCell = verifyOwnedResourceValidation();
+    ownedInvalidDrop->setArgOperand(0, ownedHostCell);
+    ownedInvalidResourceReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    const bool acceptedInvalidResourceSuccess = verifyOwnedResourceValidation();
+    ownedInvalidResourceReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_NATIVE_REF_RESULT_OWNER_INVALID_RESOURCE_V1));
+    if (acceptedNullResourceOwner || acceptedWrongResourceOwner ||
+        acceptedInvertedResourceGate || acceptedEnabledInjection ||
+        acceptedInvertedAdoptionGate || acceptedWrongHostResourceTag ||
+        acceptedNullInvalidOwner || acceptedInvertedInvalidDrop ||
+        acceptedWrongInvalidDropCell || acceptedInvalidResourceSuccess ||
+        !verifyOwnedResourceValidation())
+        return fail("Native v3 host accepted altered resource validation");
     const auto verifyOwnedGates = [&] {
         return luna::codegen::verifyNativeOwnedResultHostOwnerLeaseGates(
             ownedPairModule, ownedPairHost->getName().str(),

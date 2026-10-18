@@ -757,6 +757,155 @@ bool verifyNativeOwnedResultHostScalarCommit(
     return true;
 }
 
+bool verifyNativeOwnedResultHostResourceValidation(
+    const llvm::Module& generated, const std::string& hostLinkageName,
+    const std::string& transferLinkageName,
+    const std::string& dropLinkageName, std::string& error) {
+    if (!verifyNativeOwnedResultHostScalarCommit(
+            generated, hostLinkageName, transferLinkageName, error) ||
+        !verifyNativeOwnedResultHostAdoption(
+            generated, hostLinkageName, dropLinkageName, error))
+        return false;
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    const auto* host = generated.getFunction(hostLinkageName);
+    const auto* transfer = generated.getFunction(transferLinkageName);
+    const auto* drop = generated.getFunction(dropLinkageName);
+    const auto* adoption = generated.getFunction(
+        "luna_runtime_owned_result_adopt_v1");
+    const llvm::CallInst* transferCall = nullptr;
+    const llvm::CallInst* adoptCall = nullptr;
+    for (const auto& block : *host)
+        for (const auto& instruction : block)
+            if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                    &instruction)) {
+                if (call->getCalledFunction() == transfer) transferCall = call;
+                if (call->getCalledFunction() == adoption) adoptCall = call;
+            }
+    const auto* ownerCell = transferCall->getArgOperand(4);
+    const auto* transferBranch = llvm::cast<llvm::BranchInst>(
+        transferCall->getParent()->getTerminator());
+    const auto* dispatched = transferBranch->getSuccessor(0);
+    const auto* tagLoad = llvm::cast<llvm::LoadInst>(&dispatched->front());
+    const auto* ownerLoad = llvm::cast<llvm::LoadInst>(
+        &*std::next(dispatched->begin()));
+    const auto* dispatchBranch = llvm::cast<llvm::BranchInst>(
+        dispatched->getTerminator());
+    const auto* resource = dispatchBranch->getSuccessor(0);
+    const auto* scalar = dispatchBranch->getSuccessor(1);
+    const auto* scalarBranch = llvm::cast<llvm::BranchInst>(
+        scalar->getTerminator());
+    const auto* invalidCheck = scalarBranch->getSuccessor(1);
+    const auto solePredecessor = [](const llvm::BasicBlock* block,
+                                    const llvm::BasicBlock* expected) {
+        return std::distance(llvm::pred_begin(block),
+                             llvm::pred_end(block)) == 1 &&
+            *llvm::pred_begin(block) == expected;
+    };
+    const auto ownerComparison = [ownerLoad](const llvm::ICmpInst* check,
+                                             llvm::ICmpInst::Predicate predicate) {
+        return check && check->getPredicate() == predicate &&
+            ((check->getOperand(0) == ownerLoad &&
+              llvm::isa<llvm::ConstantPointerNull>(check->getOperand(1))) ||
+             (check->getOperand(1) == ownerLoad &&
+              llvm::isa<llvm::ConstantPointerNull>(check->getOperand(0))));
+    };
+    if (resource->size() != 2)
+        return reject("Native v3 host resource owner gate changed its instructions");
+    const auto* resourceCheck = llvm::dyn_cast<llvm::ICmpInst>(
+        &resource->front());
+    const auto* resourceBranch = llvm::dyn_cast<llvm::BranchInst>(
+        resource->getTerminator());
+    if (!ownerComparison(resourceCheck, llvm::ICmpInst::ICMP_NE) ||
+        !resourceBranch || !resourceBranch->isConditional() ||
+        resourceBranch->getCondition() != resourceCheck)
+        return reject("Native v3 host resource arm lost its non-null owner gate");
+    const auto* adoptGate = resourceBranch->getSuccessor(0);
+    const auto* invalidReturn = resourceBranch->getSuccessor(1);
+    if (adoptGate == invalidReturn || !solePredecessor(adoptGate, resource) ||
+        adoptGate->size() != 2)
+        return reject("Native v3 host resource arm bypasses adoption gate");
+    const auto* injectionCheck = llvm::dyn_cast<llvm::ICmpInst>(
+        &adoptGate->front());
+    const auto* injectionBranch = llvm::dyn_cast<llvm::BranchInst>(
+        adoptGate->getTerminator());
+    const auto* injectionZero = injectionCheck &&
+        injectionCheck->getPredicate() == llvm::ICmpInst::ICMP_EQ
+        ? llvm::dyn_cast<llvm::ConstantInt>(injectionCheck->getOperand(1))
+        : nullptr;
+    if (!injectionZero || !injectionZero->isZero() ||
+        injectionCheck->getOperand(0) != host->getArg(6) ||
+        !injectionBranch || !injectionBranch->isConditional() ||
+        injectionBranch->getCondition() != injectionCheck)
+        return reject("Native v3 host resource adoption lost zero injection gate");
+    const auto* adoptBlock = injectionBranch->getSuccessor(0);
+    const auto* adoptionDrop = injectionBranch->getSuccessor(1);
+    if (adoptBlock == adoptionDrop || !solePredecessor(adoptBlock, adoptGate) ||
+        adoptBlock != adoptCall->getParent() || adoptBlock->size() != 3 ||
+        &adoptBlock->front() != adoptCall ||
+        adoptCall->getArgOperand(0) != ownerLoad)
+        return reject("Native v3 host resource arm changed its adoption owner");
+    const auto* adoptBranch = llvm::cast<llvm::BranchInst>(
+        adoptBlock->getTerminator());
+    const auto* committed = adoptBranch->getSuccessor(0);
+    if (adoptBranch->getSuccessor(1) != adoptionDrop ||
+        std::distance(llvm::pred_begin(adoptionDrop),
+                      llvm::pred_end(adoptionDrop)) != 2)
+        return reject("Native v3 host resource adoption bypasses failed-owner Drop");
+    for (const auto* predecessor : llvm::predecessors(adoptionDrop))
+        if (predecessor != adoptGate && predecessor != adoptBlock)
+            return reject("Native v3 host adoption Drop has another ingress");
+    const auto* committedTag = llvm::cast<llvm::StoreInst>(
+        &committed->front());
+    if (committedTag->getValueOperand() != tagLoad)
+        return reject("Native v3 host resource commit changed its transfer tag");
+    if (invalidCheck->size() != 2)
+        return reject("Native v3 host invalid-resource check changed instructions");
+    const auto* invalidOwnerCheck = llvm::dyn_cast<llvm::ICmpInst>(
+        &invalidCheck->front());
+    const auto* invalidBranch = llvm::dyn_cast<llvm::BranchInst>(
+        invalidCheck->getTerminator());
+    if (!ownerComparison(invalidOwnerCheck, llvm::ICmpInst::ICMP_NE) ||
+        !invalidBranch || !invalidBranch->isConditional() ||
+        invalidBranch->getCondition() != invalidOwnerCheck ||
+        invalidBranch->getSuccessor(1) != invalidReturn)
+        return reject("Native v3 host invalid result lost its owner fork");
+    const auto* invalidDrop = invalidBranch->getSuccessor(0);
+    if (invalidDrop == invalidReturn || !solePredecessor(invalidDrop, invalidCheck) ||
+        invalidDrop->size() != 2)
+        return reject("Native v3 host invalid owner bypasses Drop");
+    const auto* dropCall = llvm::dyn_cast<llvm::CallInst>(
+        &invalidDrop->front());
+    const auto* dropBranch = llvm::dyn_cast<llvm::BranchInst>(
+        invalidDrop->getTerminator());
+    if (!dropCall || dropCall->getCalledFunction() != drop ||
+        dropCall->getCallingConv() != llvm::CallingConv::C ||
+        dropCall->arg_size() != 1 ||
+        dropCall->getArgOperand(0) != ownerCell ||
+        !dropBranch || !dropBranch->isUnconditional() ||
+        dropBranch->getSuccessor(0) != invalidReturn)
+        return reject("Native v3 host invalid owner changed its local Drop");
+    const auto* invalidStatusReturn = invalidReturn->size() == 1
+        ? llvm::dyn_cast<llvm::ReturnInst>(
+            invalidReturn->getTerminator()) : nullptr;
+    const auto* invalidStatus = invalidStatusReturn
+        ? llvm::dyn_cast_or_null<llvm::ConstantInt>(
+            invalidStatusReturn->getReturnValue()) : nullptr;
+    if (!invalidStatus || invalidStatus->getZExtValue() !=
+            LUNA_NATIVE_REF_RESULT_OWNER_INVALID_RESOURCE_V1 ||
+        std::distance(llvm::pred_begin(invalidReturn),
+                      llvm::pred_end(invalidReturn)) != 3)
+        return reject("Native v3 host invalid result changed its status");
+    for (const auto* predecessor : llvm::predecessors(invalidReturn))
+        if (predecessor != resource && predecessor != invalidCheck &&
+            predecessor != invalidDrop)
+            return reject("Native v3 host invalid result has another ingress");
+    error.clear();
+    return true;
+}
+
 bool verifyNativeOwnedResultHostOwnerLeaseGates(
     const llvm::Module& generated, const std::string& hostLinkageName,
     const std::string& transferLinkageName, std::string& error) {
