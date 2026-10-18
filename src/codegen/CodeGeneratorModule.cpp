@@ -2557,21 +2557,41 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     return false;
                 }
                 std::vector<std::string> expectedDropCalls;
+                std::vector<luna::codegen::NativeOwnedResultCleanupNode>
+                    cleanupNodes;
                 const auto collectDropCalls = [&](const auto& self,
-                    const moon::TypeRecord* type) -> bool {
+                    const moon::TypeRecord* type, const TypePtr& resolved,
+                    uint32_t parentIndex, uint64_t fieldOffset) -> bool {
+                    if (!resolved || resolved->kind != TypeKind::Struct ||
+                        resolved->fields.size() != type->fields.size())
+                        return false;
                     const auto* frozen = program.findDeclaration(type->dropGlue);
                     if (!frozen) return false;
+                    const auto nodeIndex = static_cast<uint32_t>(
+                        cleanupNodes.size());
+                    cleanupNodes.push_back({frozen->linkageName,
+                        parentIndex, fieldOffset, typeSize(resolved),
+                        typeAlignment(resolved)});
                     expectedDropCalls.push_back(frozen->linkageName);
-                    for (const auto& field : type->fields) {
+                    for (size_t index = 0; index < type->fields.size(); ++index) {
+                        const auto& field = type->fields[index];
+                        if (resolved->fields[index].name != field.name ||
+                            luna::types::typeId(
+                                resolved->fields[index].type) != field.type)
+                            return false;
                         const auto* nested = program.findType(field.type);
                         if (nested && nested->kind == TypeKind::Struct &&
-                            !self(self, nested))
+                            !self(self, nested,
+                                resolved->fields[index].type, nodeIndex,
+                                luna::layout::productFieldOffset(
+                                    resolved, index)))
                             return false;
                     }
                     expectedDropCalls.push_back("rt_dealloc");
                     return true;
                 };
-                if (!collectDropCalls(collectDropCalls, resourcePayload)) {
+                if (!collectDropCalls(collectDropCalls, resourcePayload,
+                        resourceType, 0, 0)) {
                     failure = "private Ref Result transferred Drop lost its frozen reference";
                     return false;
                 }
@@ -2636,7 +2656,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     !luna::codegen::verifyNativeOwnedResultTransferClosedGraph(
                         *proof.mModule, transfer->getName().str(),
                         *privateOwnedResultFacts, expectedDropCalls,
-                        typeSize(resourceType), typeAlignment(resourceType),
+                        cleanupNodes,
                         {LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST,
                          LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST,
                          LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_RESOURCE_V1_TEST,

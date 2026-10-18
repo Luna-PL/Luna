@@ -167,6 +167,26 @@ bool verifyNativeOwnedResultTransferInjectedCleanup(
     uint32_t invalidResourceStatus, uint32_t injectedFailureStatus,
     std::string& error);
 
+// Preorder view of the admitted owned Struct tree. Entry zero is the root;
+// each later entry names its parent and pointer-field offset in that parent.
+struct NativeOwnedResultCleanupNode {
+    std::string dropLinkageName;
+    uint32_t parentIndex;
+    uint64_t fieldOffset;
+    uint64_t allocationSize;
+    uint64_t allocationAlignment;
+};
+
+// Binds every nested Drop and deallocation to a pointer loaded from the
+// source-derived field offset of its parent owner.
+bool verifyNativeOwnedResultTransferCleanupProvenance(
+    const llvm::Module& generated, const std::string& transferLinkageName,
+    const NativeOwnedResultSourceFacts& source,
+    const std::vector<std::string>& expectedCleanupCalls,
+    const std::vector<NativeOwnedResultCleanupNode>& cleanupNodes,
+    uint32_t invalidResourceStatus, uint32_t injectedFailureStatus,
+    std::string& error);
+
 // Checks the owned-error transfer's scalar Ok arm from body tag dispatch
 // through injection failure or a success commit that writes tag and scalar.
 bool verifyNativeOwnedResultTransferScalarFork(
@@ -216,7 +236,7 @@ bool verifyNativeOwnedResultTransferClosedGraph(
     const llvm::Module& generated, const std::string& transferLinkageName,
     const NativeOwnedResultSourceFacts& source,
     const std::vector<std::string>& expectedCleanupCalls,
-    uint64_t allocationSize, uint64_t allocationAlignment,
+    const std::vector<NativeOwnedResultCleanupNode>& cleanupNodes,
     const NativeOwnedResultTransferStatuses& statuses,
     std::string& error);
 

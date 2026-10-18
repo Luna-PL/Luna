@@ -6355,19 +6355,21 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         acceptedPrematureTransferRead || acceptedTransferFailureWrite ||
         !verifyTransferOutputGates())
         return fail("Native v3 transfer accepted altered output gates");
+    const luna::codegen::NativeOwnedResultTransferStatuses transferStatuses = {
+        LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST,
+        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST,
+        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_RESOURCE_V1_TEST,
+        LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST,
+        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_CONTEXT_V1_TEST,
+        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_HANDLE_V1_TEST,
+        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST,
+        LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST};
     const auto verifyTransferGraph = [&] {
         return luna::codegen::verifyNativeOwnedResultTransferClosedGraph(
             ownedPairModule, ownedCleanupTransfer->getName().str(),
-            ownedCleanupFacts, ownedCleanupCalls, 4, 4,
-            {LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST,
-             LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST,
-             LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_RESOURCE_V1_TEST,
-             LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST,
-             LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_CONTEXT_V1_TEST,
-             LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_HANDLE_V1_TEST,
-             LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST,
-             LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST},
-            ownedSourceError);
+            ownedCleanupFacts, ownedCleanupCalls,
+            {{ownedCleanupDrop->getName().str(), 0, 0, 4, 4}},
+            transferStatuses, ownedSourceError);
     };
     if (!verifyTransferGraph())
         return fail("Native v3 transfer lost its closed status graph");
@@ -6387,6 +6389,90 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     if (acceptedOrphanTransferBlock || acceptedTransferAlloca ||
         acceptedVolatileTransferOwner || !verifyTransferGraph())
         return fail("Native v3 transfer accepted an open status graph");
+    auto* nestedCleanupDrop = llvm::Function::Create(
+        llvm::FunctionType::get(llvm::Type::getVoidTy(ownedPairContext),
+            {ownedPairPtr}, false),
+        llvm::Function::ExternalLinkage,
+        "luna_native_nested_cleanup_drop", ownedPairModule);
+    llvm::IRBuilder<> nestedCleanupBuilder(ownedCleanupDeallocCall);
+    auto* nestedFieldAddress = llvm::cast<llvm::GetElementPtrInst>(
+        nestedCleanupBuilder.CreateGEP(
+            llvm::Type::getInt8Ty(ownedPairContext), ownedCleanupOwner,
+            llvm::ConstantInt::get(ownedPairSize, 8)));
+    auto* nestedOwnerLoad = nestedCleanupBuilder.CreateLoad(
+        ownedPairPtr, nestedFieldAddress);
+    auto* nestedDropCall = nestedCleanupBuilder.CreateCall(
+        nestedCleanupDrop, {nestedOwnerLoad});
+    auto* nestedDeallocCall = nestedCleanupBuilder.CreateCall(
+        ownedCleanupDealloc,
+        {nestedOwnerLoad, llvm::ConstantInt::get(ownedPairSize, 4),
+         llvm::ConstantInt::get(ownedPairSize, 4)});
+    ownedCleanupDeallocCall->setArgOperand(1,
+        llvm::ConstantInt::get(ownedPairSize, 16));
+    ownedCleanupDeallocCall->setArgOperand(2,
+        llvm::ConstantInt::get(ownedPairSize, 8));
+    const std::vector<std::string> nestedCleanupCalls = {
+        ownedCleanupDrop->getName().str(),
+        nestedCleanupDrop->getName().str(), "rt_dealloc", "rt_dealloc"};
+    const std::vector<luna::codegen::NativeOwnedResultCleanupNode>
+        nestedCleanupNodes = {
+            {ownedCleanupDrop->getName().str(), 0, 0, 16, 8},
+            {nestedCleanupDrop->getName().str(), 0, 8, 4, 4}};
+    const auto verifyNestedCleanup = [&] {
+        return luna::codegen::verifyNativeOwnedResultTransferCleanupProvenance(
+            ownedPairModule, ownedCleanupTransfer->getName().str(),
+            ownedCleanupFacts, nestedCleanupCalls, nestedCleanupNodes,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_RESOURCE_V1_TEST,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST,
+            ownedSourceError);
+    };
+    const auto verifyNestedTransferGraph = [&] {
+        return luna::codegen::verifyNativeOwnedResultTransferClosedGraph(
+            ownedPairModule, ownedCleanupTransfer->getName().str(),
+            ownedCleanupFacts, nestedCleanupCalls, nestedCleanupNodes,
+            transferStatuses, ownedSourceError);
+    };
+    if (!verifyNestedCleanup() || !verifyNestedTransferGraph())
+        return fail("Native v3 transfer lost nested cleanup provenance");
+    nestedDropCall->setArgOperand(0, ownedCleanupOwner);
+    const bool acceptedParentAsNestedDrop = verifyNestedCleanup();
+    nestedDropCall->setArgOperand(0, nestedOwnerLoad);
+    nestedDeallocCall->setArgOperand(0, ownedCleanupOwner);
+    const bool acceptedParentAsNestedDealloc = verifyNestedCleanup();
+    nestedDeallocCall->setArgOperand(0, nestedOwnerLoad);
+    nestedFieldAddress->setOperand(1,
+        llvm::ConstantInt::get(ownedPairSize, 0));
+    const bool acceptedWrongNestedOffset = verifyNestedCleanup();
+    nestedFieldAddress->setOperand(1,
+        llvm::ConstantInt::get(ownedPairSize, 8));
+    nestedOwnerLoad->setOperand(0, ownedCleanupTransfer->getArg(4));
+    const bool acceptedOutputAsNestedField = verifyNestedCleanup();
+    nestedOwnerLoad->setOperand(0, nestedFieldAddress);
+    nestedDeallocCall->setArgOperand(1,
+        llvm::ConstantInt::get(ownedPairSize, 8));
+    const bool acceptedWrongNestedSize = verifyNestedCleanup();
+    nestedDeallocCall->setArgOperand(1,
+        llvm::ConstantInt::get(ownedPairSize, 4));
+    nestedDropCall->setCallingConv(llvm::CallingConv::Fast);
+    const bool acceptedWrongNestedDropConvention = verifyNestedCleanup();
+    nestedDropCall->setCallingConv(llvm::CallingConv::C);
+    if (acceptedParentAsNestedDrop || acceptedParentAsNestedDealloc ||
+        acceptedWrongNestedOffset || acceptedOutputAsNestedField ||
+        acceptedWrongNestedSize || acceptedWrongNestedDropConvention ||
+        !verifyNestedCleanup() ||
+        !verifyNestedTransferGraph())
+        return fail("Native v3 transfer accepted altered nested cleanup");
+    nestedDeallocCall->eraseFromParent();
+    nestedDropCall->eraseFromParent();
+    nestedOwnerLoad->eraseFromParent();
+    nestedFieldAddress->eraseFromParent();
+    nestedCleanupDrop->eraseFromParent();
+    ownedCleanupDeallocCall->setArgOperand(1,
+        llvm::ConstantInt::get(ownedPairSize, 4));
+    ownedCleanupDeallocCall->setArgOperand(2,
+        llvm::ConstantInt::get(ownedPairSize, 4));
+    if (!verifyTransferGraph())
+        return fail("Native v3 transfer lost its restored cleanup graph");
     auto mutableOwnedError = std::find_if(
         tryApplyModule->typeTable.begin(), tryApplyModule->typeTable.end(),
         [&](const moon::TypeRecord& type) {

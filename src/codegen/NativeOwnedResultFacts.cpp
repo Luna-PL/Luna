@@ -1433,6 +1433,155 @@ bool verifyNativeOwnedResultTransferInjectedCleanup(
     return true;
 }
 
+bool verifyNativeOwnedResultTransferCleanupProvenance(
+    const llvm::Module& generated, const std::string& transferLinkageName,
+    const NativeOwnedResultSourceFacts& source,
+    const std::vector<std::string>& expectedCleanupCalls,
+    const std::vector<NativeOwnedResultCleanupNode>& cleanupNodes,
+    uint32_t invalidResourceStatus, uint32_t injectedFailureStatus,
+    std::string& error) {
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    if (cleanupNodes.empty() || cleanupNodes.size() > 3 ||
+        expectedCleanupCalls.size() != cleanupNodes.size() * 2 ||
+        cleanupNodes.front().parentIndex != 0 ||
+        cleanupNodes.front().fieldOffset != 0)
+        return reject("Native v3 transfer cleanup lacks a bounded owner tree");
+    for (size_t index = 0; index < cleanupNodes.size(); ++index) {
+        const auto& node = cleanupNodes[index];
+        if (node.dropLinkageName.empty() ||
+            node.dropLinkageName == "rt_dealloc" ||
+            node.allocationSize == 0 || node.allocationSize > (1u << 20) ||
+            node.allocationAlignment == 0 ||
+            node.allocationAlignment > 4096 ||
+            (node.allocationAlignment & (node.allocationAlignment - 1)) != 0)
+            return reject("Native v3 transfer cleanup changed an owner layout");
+        if (index == 0) continue;
+        if (node.parentIndex >= index ||
+            cleanupNodes[node.parentIndex].allocationSize < sizeof(void*) ||
+            node.fieldOffset >
+                cleanupNodes[node.parentIndex].allocationSize - sizeof(void*) ||
+            node.fieldOffset % alignof(void*) != 0)
+            return reject("Native v3 transfer cleanup changed a nested field offset");
+    }
+    if (!verifyNativeOwnedResultTransferInjectedCleanup(
+            generated, transferLinkageName, source, expectedCleanupCalls,
+            cleanupNodes.front().allocationSize,
+            cleanupNodes.front().allocationAlignment,
+            invalidResourceStatus, injectedFailureStatus, error))
+        return false;
+    const auto* transfer = generated.getFunction(transferLinkageName);
+    const auto* body = generated.getFunction(source.sourceLinkageName);
+    const llvm::CallInst* bodyCall = nullptr;
+    for (const auto& block : *transfer)
+        for (const auto& instruction : block)
+            if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                    &instruction); call && call->getCalledFunction() == body)
+                bodyCall = call;
+    const auto* dispatch = llvm::cast<llvm::BranchInst>(
+        bodyCall->getParent()->getTerminator());
+    const auto* resource = llvm::cast<llvm::BranchInst>(
+        dispatch->getSuccessor(1)->getTerminator());
+    const auto* valid = llvm::cast<llvm::BranchInst>(
+        resource->getSuccessor(0)->getTerminator());
+    const auto* cleanup = valid->getSuccessor(0);
+    std::vector<const llvm::CallInst*> calls;
+    for (const auto& instruction : *cleanup)
+        if (const auto* call = llvm::dyn_cast<llvm::CallInst>(&instruction))
+            calls.push_back(call);
+    std::vector<const llvm::Value*> owners(cleanupNodes.size());
+    std::vector<size_t> active;
+    size_t nextNode = 0;
+    for (const auto* call : calls) {
+        const auto* callee = call->getCalledFunction();
+        if (!callee)
+            return reject("Native v3 transfer cleanup changed a Drop call");
+        if (callee->getName() == "rt_dealloc") {
+            if (active.empty())
+                return reject("Native v3 transfer cleanup deallocates without an owner");
+            const size_t index = active.back();
+            const auto& node = cleanupNodes[index];
+            const auto* size = call->arg_size() == 3
+                ? llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(1))
+                : nullptr;
+            const auto* alignment = call->arg_size() == 3
+                ? llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(2))
+                : nullptr;
+            if (!callee->isDeclaration() ||
+                callee->isVarArg() || callee->arg_size() != 3 ||
+                !callee->getFunctionType()->getParamType(0)->isPointerTy() ||
+                !callee->getFunctionType()->getParamType(1)->isIntegerTy(
+                    sizeof(void*) * 8) ||
+                !callee->getFunctionType()->getParamType(2)->isIntegerTy(
+                    sizeof(void*) * 8) ||
+                callee->getCallingConv() != llvm::CallingConv::C ||
+                !callee->getReturnType()->isVoidTy() ||
+                call->getCallingConv() != llvm::CallingConv::C ||
+                call->arg_size() != 3 ||
+                call->getArgOperand(0) != owners[index] ||
+                !size || !alignment ||
+                size->getBitWidth() != sizeof(void*) * 8 ||
+                alignment->getBitWidth() != sizeof(void*) * 8 ||
+                size->getZExtValue() != node.allocationSize ||
+                alignment->getZExtValue() != node.allocationAlignment)
+                return reject("Native v3 transfer cleanup changed nested deallocation");
+            active.pop_back();
+            continue;
+        }
+        if (nextNode == cleanupNodes.size() ||
+            callee->getName() != cleanupNodes[nextNode].dropLinkageName ||
+            callee->isVarArg() || callee->arg_size() != 1 ||
+            !callee->getFunctionType()->getParamType(0)->isPointerTy() ||
+            !callee->getReturnType()->isVoidTy() ||
+            callee->getCallingConv() != llvm::CallingConv::C ||
+            call->getCallingConv() != llvm::CallingConv::C ||
+            call->arg_size() != 1)
+            return reject("Native v3 transfer cleanup changed nested Drop order");
+        const size_t index = nextNode++;
+        const auto* owner = call->getArgOperand(0);
+        if (index == 0) {
+            if (!active.empty())
+                return reject("Native v3 transfer cleanup changed root ownership");
+        } else {
+            if (active.empty() ||
+                cleanupNodes[index].parentIndex != active.back())
+                return reject("Native v3 transfer cleanup changed nested ownership");
+            const auto* loaded = llvm::dyn_cast<llvm::LoadInst>(owner);
+            if (!loaded || loaded->getParent() != cleanup ||
+                !loaded->getType()->isPointerTy() ||
+                loaded->isVolatile() || loaded->isAtomic())
+                return reject("Native v3 transfer cleanup lost a nested owner load");
+            const auto* field = loaded->getPointerOperand();
+            const auto offset = cleanupNodes[index].fieldOffset;
+            if (offset == 0) {
+                if (field != owners[active.back()])
+                    return reject("Native v3 transfer cleanup changed a zero-offset owner field");
+            } else {
+                const auto* gep = llvm::dyn_cast<llvm::GetElementPtrInst>(
+                    field);
+                const auto* indexValue = gep && gep->getNumIndices() == 1
+                    ? llvm::dyn_cast<llvm::ConstantInt>(gep->getOperand(1))
+                    : nullptr;
+                if (!gep || gep->getParent() != cleanup ||
+                    !gep->getSourceElementType()->isIntegerTy(8) ||
+                    gep->getPointerOperand() != owners[active.back()] ||
+                    !indexValue ||
+                    indexValue->getBitWidth() != sizeof(void*) * 8 ||
+                    indexValue->getZExtValue() != offset)
+                    return reject("Native v3 transfer cleanup changed a nested owner field");
+            }
+        }
+        owners[index] = owner;
+        active.push_back(index);
+    }
+    if (nextNode != cleanupNodes.size() || !active.empty())
+        return reject("Native v3 transfer cleanup left an owner unaccounted");
+    error.clear();
+    return true;
+}
+
 bool verifyNativeOwnedResultTransferScalarFork(
     const llvm::Module& generated, const std::string& transferLinkageName,
     const NativeOwnedResultSourceFacts& source,
@@ -1948,12 +2097,12 @@ bool verifyNativeOwnedResultTransferClosedGraph(
     const llvm::Module& generated, const std::string& transferLinkageName,
     const NativeOwnedResultSourceFacts& source,
     const std::vector<std::string>& expectedCleanupCalls,
-    uint64_t allocationSize, uint64_t allocationAlignment,
+    const std::vector<NativeOwnedResultCleanupNode>& cleanupNodes,
     const NativeOwnedResultTransferStatuses& statuses,
     std::string& error) {
-    if (!verifyNativeOwnedResultTransferInjectedCleanup(
+    if (!verifyNativeOwnedResultTransferCleanupProvenance(
             generated, transferLinkageName, source, expectedCleanupCalls,
-            allocationSize, allocationAlignment,
+            cleanupNodes,
             statuses.invalidResource, statuses.injectedFailure,
             error) ||
         !verifyNativeOwnedResultTransferScalarFork(
