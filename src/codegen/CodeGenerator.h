@@ -100,9 +100,16 @@ private:
 
 // Test-only loaded Ref/Result host adapter. It supplies a Runtime-issued code
 // lease token and stable owner cell to the verified six-argument candidate
-// entry; failure injection remains on a separate test entry.
+// entry; the typed overload pins and checks Runtime-issued ingress. Failure
+// injection remains on a separate test entry.
 class LunaPrivateRefResultLoadedEntry {
 public:
+    int32_t call(
+        const luna::runtime::RuntimeFragmentExecutionContext& parent,
+        const luna::runtime::RuntimeFragmentRefHandle& borrowedRef,
+        uint32_t* tagOutput, int32_t* scalarOutput,
+        luna::runtime::RuntimeOwnedResultHandle& ownerOutput,
+        bool failAdoptionForTest = false) const;
     int32_t call(const void* parentContext, const void* borrowedRef,
                  uint32_t* tagOutput, int32_t* scalarOutput,
                  luna::runtime::RuntimeOwnedResultHandle& ownerOutput,
@@ -114,6 +121,8 @@ private:
     const void* entry_ = nullptr;
     const void* injectionEntry_ = nullptr;
     const void* drop_ = nullptr;
+    std::string refSlotSymbolId_;
+    std::string refSlotContractId_;
 };
 #endif
 

@@ -1274,6 +1274,11 @@ handle。资源 Err、标量 Ok、伪造源码身份、错误 Ref 目标、已�
 零；其私有无指针证明将生成入口、注入入口及 Drop 的 linkage、ABI profile、状态域
 与封闭源码事实配对。已装载适配层在同一个 JIT module 查找代码前核对该证明。
 六参数入口仍限于私有 JIT 候选形态，不生成 Native v3 导出。
+私有已装载 Result 适配层现另有类型化宿主调用：先预检输出 cell，再固定 Runtime
+签发的 parent 与借用 Ref，检查冻结的精确 Slot／Contract，并在生成入口调用期间
+保留这些 pin。canonical JIT 回归覆盖空 context／handle、错误目标、无效输出的
+优先顺序、标量成功及拥有型 Err 交接。裸指针测试入口仍供直接探测生成 wrapper；
+这两种入口都不发布 v3 descriptor 或公开 carrier ABI。
 Runtime 现还提供内部 C 收养入口，接收返回 owner、生成的 Drop 指针、Runtime
 发放的有效代码 lease token，以及稳定且为空的 owner cell。入口通过 Runtime
 存活表解析 token，无须读取宿主 C++ 对象；发布唯一 owner token 前校验这些输入。

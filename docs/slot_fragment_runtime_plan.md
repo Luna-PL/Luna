@@ -1702,6 +1702,13 @@ Drop linkage names, ABI profile and status domain with the sealed source facts;
 the loaded adapter checks that proof before looking up code in the same JIT
 module. The six-argument entry is still limited to the private JIT candidate
 shape and does not create a Native v3 export.
+The private loaded Result adapter now also has a typed host call. It checks
+output cells before ingress, pins the Runtime-issued parent and borrowed Ref,
+checks the exact frozen Slot/Contract, and retains those pins through the
+generated call. Canonical JIT regressions cover empty context/handle, wrong
+target, invalid output priority, scalar success and owned Err handoff. The
+raw-pointer test entry remains for direct generated-wrapper probes; neither
+entry publishes a v3 descriptor or a public carrier ABI.
 Runtime now also has an internal C adoption entry that takes a returned owner,
 generated Drop pointer, Runtime-issued live code-lease token and stable empty
 owner cell. The token is resolved in Runtime's live table without dereferencing

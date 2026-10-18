@@ -223,6 +223,30 @@ bool decodePrivateRefUnitApplyEntry(
         return false;
     return cursor == bytes.size();
 }
+
+bool validPrivateRefResultOutputs(
+    uint32_t* tagOutput, int32_t* scalarOutput,
+    luna::runtime::RuntimeOwnedResultHandle& ownerOutput) {
+    if (!tagOutput || !scalarOutput || ownerOutput) return false;
+    const auto tagAddress = reinterpret_cast<uintptr_t>(tagOutput);
+    const auto scalarAddress = reinterpret_cast<uintptr_t>(scalarOutput);
+    const auto separated = [](uintptr_t left, size_t leftSize,
+                              uintptr_t right, size_t rightSize) {
+        return left < right ? right - left >= leftSize
+                            : left - right >= rightSize;
+    };
+    const auto ownerCell = ownerOutput.cell();
+    const auto ownerAddress = reinterpret_cast<uintptr_t>(ownerCell);
+    return (tagAddress & (alignof(uint32_t) - 1)) == 0 &&
+        (scalarAddress & (alignof(int32_t) - 1)) == 0 &&
+        separated(tagAddress, sizeof(uint32_t),
+                  scalarAddress, sizeof(int32_t)) &&
+        (!ownerCell ||
+         (separated(tagAddress, sizeof(uint32_t),
+                    ownerAddress, sizeof(void*)) &&
+          separated(scalarAddress, sizeof(int32_t),
+                    ownerAddress, sizeof(void*))));
+}
 #endif
 
 bool isFrameField(const llvm::Value* address, const llvm::Value* frame,
@@ -475,6 +499,43 @@ int32_t LunaPrivateRefPairUnitLoadedEntry::call(
 }
 
 int32_t LunaPrivateRefResultLoadedEntry::call(
+    const luna::runtime::RuntimeFragmentExecutionContext& parent,
+    const luna::runtime::RuntimeFragmentRefHandle& borrowedRef,
+    uint32_t* tagOutput, int32_t* scalarOutput,
+    luna::runtime::RuntimeOwnedResultHandle& ownerOutput,
+    bool failAdoptionForTest) const {
+    auto keepCodeAlive = lease_;
+    if (!keepCodeAlive || !entry_ || !injectionEntry_ || !drop_)
+        return LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST;
+    if (!validPrivateRefResultOutputs(
+            tagOutput, scalarOutput, ownerOutput))
+        return LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST;
+    const auto pinnedParent = parent;
+    const auto checkedContext =
+        luna_compiler_fragment_context_check(pinnedParent.opaque());
+    if (checkedContext == LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_CONTEXT)
+        return LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_CONTEXT_V1_TEST;
+    if (checkedContext != LUNA_COMPILER_FRAGMENT_OVERRIDE_SUCCESS)
+        return LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST;
+    luna::runtime::RuntimeFragmentRefHandle pinnedReference;
+    std::string pinError;
+    if (!luna::runtime::pinRuntimeFragmentRefHandle(
+            borrowedRef, pinnedReference, pinError))
+        return LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_HANDLE_V1_TEST;
+    const auto checkedRef = luna_runtime_fragment_ref_check_v1(
+        pinnedReference.opaque(), refSlotSymbolId_.c_str(),
+        refSlotContractId_.c_str());
+    if (checkedRef == LUNA_RUNTIME_FRAGMENT_REF_INVALID_HANDLE_V1)
+        return LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_HANDLE_V1_TEST;
+    if (checkedRef == LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1)
+        return LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST;
+    if (checkedRef != LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1)
+        return LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST;
+    return call(pinnedParent.opaque(), pinnedReference.opaque(), tagOutput,
+                scalarOutput, ownerOutput, failAdoptionForTest);
+}
+
+int32_t LunaPrivateRefResultLoadedEntry::call(
     const void* parentContext, const void* borrowedRef,
     uint32_t* tagOutput, int32_t* scalarOutput,
     luna::runtime::RuntimeOwnedResultHandle& ownerOutput,
@@ -482,26 +543,8 @@ int32_t LunaPrivateRefResultLoadedEntry::call(
     auto keepCodeAlive = lease_;
     if (!keepCodeAlive || !entry_ || !injectionEntry_ || !drop_)
         return LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST;
-    if (!tagOutput || !scalarOutput || ownerOutput)
-        return LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST;
-    const auto tagAddress = reinterpret_cast<uintptr_t>(tagOutput);
-    const auto scalarAddress = reinterpret_cast<uintptr_t>(scalarOutput);
-    const auto separated = [](uintptr_t left, size_t leftSize,
-                              uintptr_t right, size_t rightSize) {
-        return left < right ? right - left >= leftSize
-                            : left - right >= rightSize;
-    };
-    const auto ownerCell = ownerOutput.cell();
-    const auto ownerAddress = reinterpret_cast<uintptr_t>(ownerCell);
-    if ((tagAddress & (alignof(uint32_t) - 1)) != 0 ||
-        (scalarAddress & (alignof(int32_t) - 1)) != 0 ||
-        !separated(tagAddress, sizeof(uint32_t),
-                   scalarAddress, sizeof(int32_t)) ||
-        (ownerCell &&
-            (!separated(tagAddress, sizeof(uint32_t),
-                        ownerAddress, sizeof(void*)) ||
-             !separated(scalarAddress, sizeof(int32_t),
-                        ownerAddress, sizeof(void*)))))
+    if (!validPrivateRefResultOutputs(
+            tagOutput, scalarOutput, ownerOutput))
         return LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST;
     using InjectionEntry = int32_t (*)(
         const void*, void*, uint32_t*, int32_t*, void**,
@@ -598,6 +641,8 @@ CodeGenerator::loadPrivateRuntimeFragmentRefResultEntryForTest(
     loaded->entry_ = entry;
     loaded->injectionEntry_ = injectionEntry;
     loaded->drop_ = drop;
+    loaded->refSlotSymbolId_ = proof.source.refSlotSymbolId;
+    loaded->refSlotContractId_ = proof.source.refSlotContractId;
     failure.clear();
     return loaded;
 }

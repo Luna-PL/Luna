@@ -720,6 +720,8 @@ bool exercisePrivateRefApplyJit(
                     return false;
                 }
                 luna::runtime::RuntimeOwnedResultHandle returnedOwner;
+                luna::runtime::RuntimeFragmentExecutionContext missingParent;
+                luna::runtime::RuntimeFragmentRefHandle missingReference;
                 if (loadedResult->call(parent.opaque(), handle.opaque(),
                         nullptr, &scalar, returnedOwner) !=
                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST ||
@@ -737,6 +739,18 @@ bool exercisePrivateRefApplyJit(
                         secondHandle.opaque(), &tag, &scalar,
                         returnedOwner) !=
                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST) ||
+                    loadedResult->call(missingParent, handle, nullptr,
+                        &scalar, returnedOwner) !=
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST ||
+                    loadedResult->call(missingParent, handle, &tag,
+                        &scalar, returnedOwner) !=
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_CONTEXT_V1_TEST ||
+                    loadedResult->call(parent, missingReference, &tag,
+                        &scalar, returnedOwner) !=
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_HANDLE_V1_TEST ||
+                    (differentSlots && loadedResult->call(parent,
+                        secondHandle, &tag, &scalar, returnedOwner) !=
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST) ||
                     tag != 42 || scalar != unchangedScalar || returnedOwner ||
                     returnedOwner.cell() != nullptr ||
                     privateRefJitExecutions != dispatchesBefore ||
@@ -745,7 +759,7 @@ bool exercisePrivateRefApplyJit(
                     return false;
                 }
                 if (expectedResult->first) {
-                    if (loadedResult->call(parent.opaque(), handle.opaque(),
+                    if (loadedResult->call(parent, handle,
                             &tag, &scalar, returnedOwner, true) !=
                             LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST ||
                         tag != 1 || scalar != expectedResult->second ||
@@ -773,7 +787,7 @@ bool exercisePrivateRefApplyJit(
                 }
                 const auto callsAfterAdoptionFailure =
                     privateRefJitAllDropProbeCalls;
-                if (loadedResult->call(parent.opaque(), handle.opaque(),
+                if (loadedResult->call(parent, handle,
                         &tag, &scalar, returnedOwner) !=
                         LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST ||
                     tag != static_cast<uint32_t>(expectedResult->first) ||
