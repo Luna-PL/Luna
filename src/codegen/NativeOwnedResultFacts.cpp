@@ -6,6 +6,7 @@
 #include "moonir/FragmentContextEffects.h"
 #include "moonir/MoonIRModule.h"
 #include "moonir/Verifier.h"
+#include "runtime/RuntimeOwnedResult.h"
 
 #include <llvm/IR/CFG.h>
 #include <llvm/IR/Constants.h>
@@ -494,6 +495,142 @@ bool verifyNativeOwnedResultHostTransferFork(
         failed->getTerminator());
     if (!failedReturn || failedReturn->getReturnValue() != transferCall)
         return reject("Native v3 host transfer changed its failure status");
+    error.clear();
+    return true;
+}
+
+bool verifyNativeOwnedResultHostOwnerLeaseGates(
+    const llvm::Module& generated, const std::string& hostLinkageName,
+    const std::string& transferLinkageName, std::string& error) {
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    const auto* host = generated.getFunction(hostLinkageName);
+    const auto* transfer = generated.getFunction(transferLinkageName);
+    const auto* lease = generated.getFunction(
+        "luna_runtime_owned_result_lease_check_v1");
+    if (!host || host->isDeclaration() || host->isVarArg() ||
+        host->getCallingConv() != llvm::CallingConv::C ||
+        !host->getReturnType()->isIntegerTy(32) ||
+        host->arg_size() != 7 || !host->hasExternalLinkage() ||
+        !host->getArg(4)->getType()->isPointerTy() ||
+        host->getArg(4)->getType()->getPointerAddressSpace() != 0 ||
+        !host->getArg(5)->getType()->isPointerTy() ||
+        host->getArg(5)->getType()->getPointerAddressSpace() != 0 ||
+        !transfer || transfer->isDeclaration() ||
+        !lease || !lease->isDeclaration() || lease->isVarArg() ||
+        lease->getCallingConv() != llvm::CallingConv::C ||
+        !lease->getReturnType()->isIntegerTy(32) ||
+        lease->arg_size() != 1 ||
+        !lease->getArg(0)->getType()->isPointerTy() ||
+        lease->getArg(0)->getType()->getPointerAddressSpace() != 0)
+        return reject("Native v3 host preflight lacks its Runtime lease profile");
+    const llvm::CallInst* transferCall = nullptr;
+    for (const auto& block : *host)
+        for (const auto& instruction : block)
+            if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                    &instruction); call && call->getCalledFunction() == transfer) {
+                if (transferCall)
+                    return reject("Native v3 host preflight has multiple transfers");
+                transferCall = call;
+            }
+    if (!transferCall)
+        return reject("Native v3 host preflight has no transfer");
+    const auto* transferBlock = transferCall->getParent();
+    if (std::distance(llvm::pred_begin(transferBlock),
+                      llvm::pred_end(transferBlock)) != 1)
+        return reject("Native v3 host transfer bypasses its lease gate");
+    const auto* leaseBlock = *llvm::pred_begin(transferBlock);
+    if (leaseBlock->size() != 3)
+        return reject("Native v3 host lease gate changed its instructions");
+    const auto* leaseCall = llvm::dyn_cast<llvm::CallInst>(
+        &leaseBlock->front());
+    const auto* leaseCompare = llvm::dyn_cast<llvm::ICmpInst>(
+        &*std::next(leaseBlock->begin()));
+    const auto* leaseBranch = llvm::dyn_cast<llvm::BranchInst>(
+        leaseBlock->getTerminator());
+    if (!leaseCall || leaseCall->getCalledFunction() != lease ||
+        leaseCall->getCallingConv() != llvm::CallingConv::C ||
+        leaseCall->arg_size() != 1 ||
+        leaseCall->getArgOperand(0) != host->getArg(5) ||
+        !leaseCompare ||
+        leaseCompare->getPredicate() != llvm::ICmpInst::ICMP_EQ ||
+        !((leaseCompare->getOperand(0) == leaseCall &&
+           llvm::isa<llvm::ConstantInt>(leaseCompare->getOperand(1)) &&
+           llvm::cast<llvm::ConstantInt>(leaseCompare->getOperand(1))
+               ->getZExtValue() == LUNA_RUNTIME_OWNED_RESULT_LEASE_LIVE_V1) ||
+          (leaseCompare->getOperand(1) == leaseCall &&
+           llvm::isa<llvm::ConstantInt>(leaseCompare->getOperand(0)) &&
+           llvm::cast<llvm::ConstantInt>(leaseCompare->getOperand(0))
+               ->getZExtValue() == LUNA_RUNTIME_OWNED_RESULT_LEASE_LIVE_V1)) ||
+        !leaseBranch || !leaseBranch->isConditional() ||
+        leaseBranch->getCondition() != leaseCompare ||
+        leaseBranch->getSuccessor(0) != transferBlock)
+        return reject("Native v3 host lease gate changed its live branch");
+    const auto* invalidLease = leaseBranch->getSuccessor(1);
+    const auto* leaseFailure = invalidLease->size() == 1
+        ? llvm::dyn_cast<llvm::ReturnInst>(
+            invalidLease->getTerminator()) : nullptr;
+    const auto* leaseStatus = leaseFailure
+        ? llvm::dyn_cast_or_null<llvm::ConstantInt>(
+            leaseFailure->getReturnValue()) : nullptr;
+    if (!leaseStatus || leaseStatus->getZExtValue() !=
+            LUNA_NATIVE_REF_RESULT_OWNER_INVALID_LEASE_V1 ||
+        std::distance(llvm::pred_begin(invalidLease),
+                      llvm::pred_end(invalidLease)) != 1 ||
+        *llvm::pred_begin(invalidLease) != leaseBlock ||
+        std::distance(llvm::pred_begin(leaseBlock),
+                      llvm::pred_end(leaseBlock)) != 1)
+        return reject("Native v3 host lease failure or ingress changed");
+    const auto* ownerBlock = *llvm::pred_begin(leaseBlock);
+    if (ownerBlock->size() != 3)
+        return reject("Native v3 host owner-cell gate changed its instructions");
+    const auto* ownerLoad = llvm::dyn_cast<llvm::LoadInst>(
+        &ownerBlock->front());
+    const auto* ownerCompare = llvm::dyn_cast<llvm::ICmpInst>(
+        &*std::next(ownerBlock->begin()));
+    const auto* ownerBranch = llvm::dyn_cast<llvm::BranchInst>(
+        ownerBlock->getTerminator());
+    if (!ownerLoad || ownerLoad->getPointerOperand() != host->getArg(4) ||
+        !ownerLoad->getType()->isPointerTy() ||
+        ownerLoad->getType()->getPointerAddressSpace() != 0 ||
+        !ownerCompare ||
+        ownerCompare->getPredicate() != llvm::ICmpInst::ICMP_EQ ||
+        !((ownerCompare->getOperand(0) == ownerLoad &&
+           llvm::isa<llvm::ConstantPointerNull>(
+               ownerCompare->getOperand(1))) ||
+          (ownerCompare->getOperand(1) == ownerLoad &&
+           llvm::isa<llvm::ConstantPointerNull>(
+               ownerCompare->getOperand(0)))) ||
+        !ownerBranch || !ownerBranch->isConditional() ||
+        ownerBranch->getCondition() != ownerCompare ||
+        ownerBranch->getSuccessor(0) != leaseBlock)
+        return reject("Native v3 host owner-cell gate changed its empty branch");
+    const auto* invalidOutput = ownerBranch->getSuccessor(1);
+    const auto* outputFailure = invalidOutput->size() == 1
+        ? llvm::dyn_cast<llvm::ReturnInst>(
+            invalidOutput->getTerminator()) : nullptr;
+    const auto* outputStatus = outputFailure
+        ? llvm::dyn_cast_or_null<llvm::ConstantInt>(
+            outputFailure->getReturnValue()) : nullptr;
+    const auto* entry = &host->getEntryBlock();
+    const auto* entryBranch = llvm::dyn_cast<llvm::BranchInst>(
+        entry->getTerminator());
+    if (!outputStatus || outputStatus->getZExtValue() !=
+            LUNA_NATIVE_REF_RESULT_OWNER_INVALID_OUTPUT_V1 ||
+        std::distance(llvm::pred_begin(ownerBlock),
+                      llvm::pred_end(ownerBlock)) != 1 ||
+        *llvm::pred_begin(ownerBlock) != entry ||
+        !entryBranch || !entryBranch->isConditional() ||
+        entryBranch->getSuccessor(0) != ownerBlock ||
+        entryBranch->getSuccessor(1) != invalidOutput ||
+        std::distance(llvm::pred_begin(invalidOutput),
+                      llvm::pred_end(invalidOutput)) != 2)
+        return reject("Native v3 host owner-cell failure or ingress changed");
+    for (const auto* predecessor : llvm::predecessors(invalidOutput))
+        if (predecessor != entry && predecessor != ownerBlock)
+            return reject("Native v3 host output failure has another ingress");
     error.clear();
     return true;
 }

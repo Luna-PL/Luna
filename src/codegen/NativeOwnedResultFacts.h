@@ -104,4 +104,11 @@ bool verifyNativeOwnedResultHostTransferFork(
     const llvm::Module& generated, const std::string& hostLinkageName,
     const std::string& transferLinkageName, std::string& error);
 
+// Proves that transfer is reachable only through the caller owner-cell-empty
+// check and the Runtime code-lease-live check. Both failed gates return their
+// versioned status. The preceding output validity expression is separate.
+bool verifyNativeOwnedResultHostOwnerLeaseGates(
+    const llvm::Module& generated, const std::string& hostLinkageName,
+    const std::string& transferLinkageName, std::string& error);
+
 } // namespace luna::codegen

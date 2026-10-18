@@ -5248,8 +5248,20 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     ownedPairBuilder.SetInsertPoint(llvm::BasicBlock::Create(
         ownedPairContext, "entry", ownedPairTransfer));
     ownedPairBuilder.CreateRet(llvm::ConstantInt::get(ownedPairI32, 0));
+    auto* ownedPairLeaseCheck = llvm::Function::Create(
+        llvm::FunctionType::get(ownedPairI32, {ownedPairPtr}, false),
+        llvm::Function::ExternalLinkage,
+        "luna_runtime_owned_result_lease_check_v1", ownedPairModule);
     auto* ownedHostPreflight = llvm::BasicBlock::Create(
         ownedPairContext, "entry", ownedPairHost);
+    auto* ownedHostCheckOwner = llvm::BasicBlock::Create(
+        ownedPairContext, "check.owner", ownedPairHost);
+    auto* ownedHostCheckLease = llvm::BasicBlock::Create(
+        ownedPairContext, "check.lease", ownedPairHost);
+    auto* ownedHostInvalidOutput = llvm::BasicBlock::Create(
+        ownedPairContext, "invalid.output", ownedPairHost);
+    auto* ownedHostInvalidLease = llvm::BasicBlock::Create(
+        ownedPairContext, "invalid.lease", ownedPairHost);
     auto* ownedHostTransfer = llvm::BasicBlock::Create(
         ownedPairContext, "transfer", ownedPairHost);
     auto* ownedHostTransferFailed = llvm::BasicBlock::Create(
@@ -5264,7 +5276,33 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto* ownedHostTag = ownedPairBuilder.CreateAlloca(ownedPairI32);
     auto* ownedHostScalar = ownedPairBuilder.CreateAlloca(ownedPairI32);
     auto* ownedHostCell = ownedPairBuilder.CreateAlloca(ownedPairPtr);
-    ownedPairBuilder.CreateBr(ownedHostTransfer);
+    auto* ownedPreflightBranch = ownedPairBuilder.CreateCondBr(
+        ownedPairBuilder.CreateIsNotNull(ownedPairHost->getArg(2)),
+        ownedHostCheckOwner, ownedHostInvalidOutput);
+    ownedPairBuilder.SetInsertPoint(ownedHostCheckOwner);
+    auto* ownedOwnerOutLoad = ownedPairBuilder.CreateLoad(
+        ownedPairPtr, ownedPairHost->getArg(4));
+    auto* ownedOwnerOutCheck = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateIsNull(ownedOwnerOutLoad));
+    ownedPairBuilder.CreateCondBr(ownedOwnerOutCheck,
+                                  ownedHostCheckLease, ownedHostInvalidOutput);
+    ownedPairBuilder.SetInsertPoint(ownedHostCheckLease);
+    auto* ownedLeaseCall = ownedPairBuilder.CreateCall(
+        ownedPairLeaseCheck, {ownedPairHost->getArg(5)});
+    auto* ownedLeaseCheck = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateICmpEQ(ownedLeaseCall,
+            llvm::ConstantInt::get(ownedPairI32,
+                LUNA_RUNTIME_OWNED_RESULT_LEASE_LIVE_V1)));
+    ownedPairBuilder.CreateCondBr(ownedLeaseCheck,
+                                  ownedHostTransfer, ownedHostInvalidLease);
+    ownedPairBuilder.SetInsertPoint(ownedHostInvalidOutput);
+    auto* ownedInvalidOutputReturn = ownedPairBuilder.CreateRet(
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_NATIVE_REF_RESULT_OWNER_INVALID_OUTPUT_V1));
+    ownedPairBuilder.SetInsertPoint(ownedHostInvalidLease);
+    auto* ownedInvalidLeaseReturn = ownedPairBuilder.CreateRet(
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_NATIVE_REF_RESULT_OWNER_INVALID_LEASE_V1));
     ownedPairBuilder.SetInsertPoint(ownedHostTransfer);
     auto* ownedHostInit = ownedPairBuilder.CreateStore(
         llvm::ConstantPointerNull::get(ownedPairPtr), ownedHostCell);
@@ -5360,6 +5398,45 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         acceptedUninitializedOwner || acceptedInvertedTransfer ||
         acceptedSwallowedStatus || !verifyOwnedTransfer())
         return fail("Native v3 host transfer accepted altered failure fork");
+    const auto verifyOwnedGates = [&] {
+        return luna::codegen::verifyNativeOwnedResultHostOwnerLeaseGates(
+            ownedPairModule, ownedPairHost->getName().str(),
+            ownedPairTransfer->getName().str(), ownedSourceError);
+    };
+    if (!verifyOwnedGates())
+        return fail("Native v3 host lost its owner and lease gates");
+    ownedOwnerOutLoad->setOperand(0, ownedPairHost->getArg(3));
+    const bool acceptedWrongOwnerCell = verifyOwnedGates();
+    ownedOwnerOutLoad->setOperand(0, ownedPairHost->getArg(4));
+    ownedOwnerOutCheck->setPredicate(llvm::ICmpInst::ICMP_NE);
+    const bool acceptedOccupiedOwner = verifyOwnedGates();
+    ownedOwnerOutCheck->setPredicate(llvm::ICmpInst::ICMP_EQ);
+    ownedLeaseCall->setArgOperand(0, ownedPairHost->getArg(0));
+    const bool acceptedWrongLeaseToken = verifyOwnedGates();
+    ownedLeaseCall->setArgOperand(0, ownedPairHost->getArg(5));
+    ownedLeaseCheck->setPredicate(llvm::ICmpInst::ICMP_NE);
+    const bool acceptedInvalidLease = verifyOwnedGates();
+    ownedLeaseCheck->setPredicate(llvm::ICmpInst::ICMP_EQ);
+    ownedInvalidOutputReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    const bool acceptedWrongOutputStatus = verifyOwnedGates();
+    ownedInvalidOutputReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_NATIVE_REF_RESULT_OWNER_INVALID_OUTPUT_V1));
+    ownedInvalidLeaseReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    const bool acceptedWrongLeaseStatus = verifyOwnedGates();
+    ownedInvalidLeaseReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_NATIVE_REF_RESULT_OWNER_INVALID_LEASE_V1));
+    ownedPreflightBranch->setSuccessor(0, ownedHostTransfer);
+    const bool acceptedBypassedGates = verifyOwnedGates();
+    ownedPreflightBranch->setSuccessor(0, ownedHostCheckOwner);
+    if (acceptedWrongOwnerCell || acceptedOccupiedOwner ||
+        acceptedWrongLeaseToken || acceptedInvalidLease ||
+        acceptedWrongOutputStatus || acceptedWrongLeaseStatus ||
+        acceptedBypassedGates || !verifyOwnedGates())
+        return fail("Native v3 host accepted altered owner or lease gates");
     auto mutableOwnedError = std::find_if(
         tryApplyModule->typeTable.begin(), tryApplyModule->typeTable.end(),
         [&](const moon::TypeRecord& type) {

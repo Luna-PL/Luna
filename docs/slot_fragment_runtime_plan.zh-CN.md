@@ -1269,6 +1269,9 @@ transfer 失败清理及宿主状态图的整体性质仍需单独的生产证�
 标签／标量／owner 暂存 cell、已置空的 owner cell，以及为零的测试注入参数。
 失败边直接返回 transfer 状态；只有成功边进入该分支的成功后继块。这尚未证明
 输出预检或 transfer 函数内部的清理。
+生产侧 owner／lease 门禁校验将调用方 owner cell 的读取和 Runtime lease 检查
+绑定到宿主参数。owner cell 非空返回状态 `1`，lease 非存活返回状态 `9`；
+transfer 只能从这两道门禁后的单一前驱进入。入口处的输出有效性表达式仍未证明。
 
 私有生成的 transfer 入口现对候选拥有型 Err 形态消费这些源码事实，核对生成的 C
 调用约定、参数数目、返回类型、源码 linkage 及错误类型。它的六个参数依次是
