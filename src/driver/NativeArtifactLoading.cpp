@@ -680,10 +680,25 @@ bool validateNativeDescriptorV4(
         return false;
     }
     std::string packageId, packageVersion, targetAbi, compilerIdentity;
-    if (!descriptorString(descriptor->package_id, packageId) ||
-        !descriptorString(descriptor->package_version, packageVersion) ||
-        !descriptorString(descriptor->target_abi, targetAbi) ||
-        !descriptorString(descriptor->compiler_identity, compilerIdentity) ||
+    const auto packageStatus = nativeImageDescriptorString(
+        handle, stagedPath, descriptor->package_id, packageId);
+    const auto versionStatus = nativeImageDescriptorString(
+        handle, stagedPath, descriptor->package_version, packageVersion);
+    const auto targetStatus = nativeImageDescriptorString(
+        handle, stagedPath, descriptor->target_abi, targetAbi);
+    const auto compilerStatus = nativeImageDescriptorString(
+        handle, stagedPath, descriptor->compiler_identity, compilerIdentity);
+    if (packageStatus == NativeImageStringStatus::Foreign ||
+        versionStatus == NativeImageStringStatus::Foreign ||
+        targetStatus == NativeImageStringStatus::Foreign ||
+        compilerStatus == NativeImageStringStatus::Foreign) {
+        error = "Native v4 library identity is outside its verified image";
+        return false;
+    }
+    if (packageStatus != NativeImageStringStatus::Valid ||
+        versionStatus != NativeImageStringStatus::Valid ||
+        targetStatus != NativeImageStringStatus::Valid ||
+        compilerStatus != NativeImageStringStatus::Valid ||
         packageId != proof.packageId || packageVersion != proof.packageVersion ||
         targetAbi != proof.targetAbi || compilerIdentity != proof.compilerIdentity) {
         error = "Native v4 library descriptor identity does not match its proof";
@@ -736,9 +751,15 @@ bool validateNativeDescriptorV4(
             row.ref_slot_contract_id, row.ref_slot_type_id};
         std::array<std::string, 10> identifiers;
         bool validIdentifiers = true;
-        for (size_t field = 0; field < identifiers.size(); ++field)
-            validIdentifiers &= descriptorString(
-                rawIdentifiers[field], identifiers[field]);
+        for (size_t field = 0; field < identifiers.size(); ++field) {
+            const auto status = nativeImageDescriptorString(
+                handle, stagedPath, rawIdentifiers[field], identifiers[field]);
+            if (status == NativeImageStringStatus::Foreign) {
+                error = "Native v4 export identity is outside its verified image";
+                return false;
+            }
+            validIdentifiers &= status == NativeImageStringStatus::Valid;
+        }
         if (row.abi_version != LUNA_NATIVE_DESCRIPTOR_ABI_V4 ||
             row.struct_size != sizeof(LunaNativeExportDescriptorV4) ||
             row.declaration_kind != LUNA_NATIVE_DECLARATION_FUNCTION_V1 ||

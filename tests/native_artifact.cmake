@@ -795,7 +795,8 @@ endforeach()
 # Independently linked v4 Ref/unit metadata also exercises typed host calls.
 # Its entry never becomes a v1 callable or ordinary GenerationBinding.
 set(v4_variants valid unbound-proof bad-row-size bad-profile bad-slot-digest bad-identity
-    bad-package bad-module bad-entry-pointer bad-linkage missing-slot-export)
+    bad-package bad-module bad-entry-pointer bad-linkage missing-slot-export
+    foreign-library-id foreign-row-id page-spanning-id)
 if(NOT WIN32)
     list(APPEND v4_variants dependency-entry foreign-descriptor
         foreign-export-table)
@@ -834,6 +835,12 @@ foreach(v4_variant IN LISTS v4_variants)
         list(APPEND v4_defines -DLUNA_TEST_V4_FOREIGN_DESCRIPTOR)
     elseif(v4_variant STREQUAL "foreign-export-table")
         list(APPEND v4_defines -DLUNA_TEST_V4_FOREIGN_EXPORT_TABLE)
+    elseif(v4_variant STREQUAL "foreign-library-id")
+        list(APPEND v4_defines -DLUNA_TEST_V4_FOREIGN_LIBRARY_ID)
+    elseif(v4_variant STREQUAL "foreign-row-id")
+        list(APPEND v4_defines -DLUNA_TEST_V4_FOREIGN_ROW_ID)
+    elseif(v4_variant STREQUAL "page-spanning-id")
+        list(APPEND v4_defines -DLUNA_TEST_V4_PAGE_SPANNING_ID)
     endif()
     execute_process(
         COMMAND "${LUNA_AOT_COMPILER}" -x c -std=c11 -fPIC
@@ -914,6 +921,12 @@ foreach(v4_variant IN LISTS v4_variants)
                 "candidate: ${v4_candidate_error}\n"
                 "generation: ${v4_generation_error}")
         endif()
+    elseif(v4_variant STREQUAL "page-spanning-id")
+        if(NOT v4_load_result EQUAL 0)
+            message(FATAL_ERROR
+                "independent Native v4 page-spanning identity was rejected.\n"
+                "${v4_load_error}")
+        endif()
     else()
         if(v4_variant STREQUAL "unbound-proof")
             set(v4_expected "does not match its proof export digest")
@@ -934,6 +947,10 @@ foreach(v4_variant IN LISTS v4_variants)
             set(v4_expected "descriptor is outside its verified image")
         elseif(v4_variant STREQUAL "foreign-export-table")
             set(v4_expected "export table is outside its verified image")
+        elseif(v4_variant STREQUAL "foreign-library-id")
+            set(v4_expected "library identity is outside its verified image")
+        elseif(v4_variant STREQUAL "foreign-row-id")
+            set(v4_expected "export identity is outside its verified image")
         else()
             set(v4_expected "entry is outside its verified image")
         endif()

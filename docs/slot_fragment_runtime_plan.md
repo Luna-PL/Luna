@@ -1237,9 +1237,12 @@ is rejected. It also requires the row module identity to equal the proof
 package identity; a valid-digest foreign-module fixture is rejected. The v4
 descriptor and export-table pointers must originate in the staged verified
 image. Independent POSIX fixtures reject either pointer when it points into a
-dependency. The read-only candidate lookup does not expose its pointer to
-typed calls or generation bindings. These
-checks bind declared metadata to the artifact; they do not yet establish that
+dependency. V4 library and row identity strings are also decoded only from
+pages in that image; fixtures reject unchanged text copied to the heap and
+accept a string spanning two image pages. The read-only candidate lookup does
+not expose a raw entry pointer; the separate typed host call uses the
+validated row while retaining the image. These checks bind declared metadata
+to the artifact; they do not yet establish that
 the declarations were derived from a sealed source function.
 The independent v4 fixture now includes its canonical typed row in the Native
 proof export digest alongside the v1 rows. After validating both descriptors,

@@ -3,7 +3,10 @@
     defined(LUNA_TEST_V3_FOREIGN_EXPORT_TABLE) || \
     defined(LUNA_TEST_V3_FOREIGN_LIBRARY_ID) || \
     defined(LUNA_TEST_V3_FOREIGN_ROW_ID) || \
-    defined(LUNA_TEST_V3_PAGE_SPANNING_ID)
+    defined(LUNA_TEST_V3_PAGE_SPANNING_ID) || \
+    defined(LUNA_TEST_V4_FOREIGN_LIBRARY_ID) || \
+    defined(LUNA_TEST_V4_FOREIGN_ROW_ID) || \
+    defined(LUNA_TEST_V4_PAGE_SPANNING_ID)
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,6 +59,9 @@ LUNA_TEST_EXPORT int32_t owned_answer(
 #endif
 
 #ifdef LUNA_TEST_V4_DESCRIPTOR
+#ifdef LUNA_TEST_V4_PAGE_SPANNING_ID
+static char spanning_unit_package_id[32768];
+#endif
 LUNA_TEST_EXPORT int32_t unit_apply(const void* parent, const void* ref) {
     return parent && ref ? LUNA_NATIVE_REF_UNIT_SUCCESS_V1 :
         LUNA_NATIVE_REF_UNIT_INVALID_CONTEXT_V1;
@@ -251,7 +257,11 @@ luna_native_library_descriptor_v3(void) {
 #define LUNA_TEST_V4_EXPORT_TABLE unit_exports
 #endif
 
+#ifdef LUNA_TEST_V4_FOREIGN_ROW_ID
+static LunaNativeExportDescriptorV4 unit_exports[] = {{
+#else
 static const LunaNativeExportDescriptorV4 unit_exports[] = {{
+#endif
     LUNA_NATIVE_DESCRIPTOR_ABI_V4,
     LUNA_TEST_V4_ROW_SIZE,
     LUNA_NATIVE_DECLARATION_FUNCTION_V1,
@@ -273,7 +283,12 @@ static const LunaNativeExportDescriptorV4 unit_exports[] = {{
     LUNA_TEST_V4_ENTRY,
 }};
 
+#if defined(LUNA_TEST_V4_FOREIGN_LIBRARY_ID) || \
+    defined(LUNA_TEST_V4_PAGE_SPANNING_ID)
+static LunaNativeLibraryDescriptorV4 unit_library
+#else
 static const LunaNativeLibraryDescriptorV4 unit_library
+#endif
     LUNA_TEST_SECTION(LUNA_TEST_DESCRIPTOR_V4_SECTION) = {
         LUNA_NATIVE_DESCRIPTOR_MAGIC_V4,
         LUNA_NATIVE_DESCRIPTOR_ABI_V4,
@@ -292,6 +307,28 @@ LUNA_TEST_EXPORT const LunaNativeLibraryDescriptorV4*
 luna_native_library_descriptor_v4(void) {
 #ifdef LUNA_TEST_V4_FOREIGN_DESCRIPTOR
     return (const LunaNativeLibraryDescriptorV4*)(const void*)&getpid;
+#elif defined(LUNA_TEST_V4_FOREIGN_LIBRARY_ID)
+    const size_t size = strlen(unit_library.package_id) + 1;
+    char* foreign = malloc(size);
+    if (!foreign) return NULL;
+    memcpy(foreign, unit_library.package_id, size);
+    unit_library.package_id = foreign;
+    return &unit_library;
+#elif defined(LUNA_TEST_V4_FOREIGN_ROW_ID)
+    const size_t size = strlen(unit_exports[0].symbol_id) + 1;
+    char* foreign = malloc(size);
+    if (!foreign) return NULL;
+    memcpy(foreign, unit_exports[0].symbol_id, size);
+    unit_exports[0].symbol_id = foreign;
+    return &unit_library;
+#elif defined(LUNA_TEST_V4_PAGE_SPANNING_ID)
+    const uintptr_t start = (uintptr_t)spanning_unit_package_id;
+    const uintptr_t boundary = (start + 2u + 16383u) & ~(uintptr_t)16383u;
+    char* spanning = (char*)(boundary - 2u);
+    static const char package_id[] = "org.luna.fixture.native_v1";
+    memcpy(spanning, package_id, sizeof(package_id));
+    unit_library.package_id = spanning;
+    return &unit_library;
 #else
     return &unit_library;
 #endif
