@@ -198,8 +198,9 @@ struct NativeOwnedResultCleanupStep {
 
 // Requires every source Drop to have a defined internal C body in the same
 // generated module, binds nested cleanup to parent-owner field offsets, and
-// audits all admitted field reads in declaration order. The Drop bodies'
-// behavior requires separate source-level proof.
+// audits all admitted field reads in declaration order. Direct deallocation,
+// recursion, indirect calls and explicit nonreturn exits in those Drop
+// bodies are rejected; their other effects require separate proof.
 bool verifyNativeOwnedResultTransferCleanupProvenance(
     const llvm::Module& generated, const std::string& transferLinkageName,
     const NativeOwnedResultSourceFacts& source,

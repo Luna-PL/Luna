@@ -1470,6 +1470,22 @@ bool verifyNativeOwnedResultTransferCleanupProvenance(
             !drop->getArg(0)->getType()->isPointerTy() ||
             drop->getArg(0)->getType()->getPointerAddressSpace() != 0)
             return reject("Native v3 transfer cleanup has no generated source Drop body");
+        for (const auto& block : *drop)
+            for (const auto& instruction : block) {
+                if (llvm::isa<llvm::InvokeInst>(instruction) ||
+                    llvm::isa<llvm::CallBrInst>(instruction) ||
+                    llvm::isa<llvm::ResumeInst>(instruction) ||
+                    llvm::isa<llvm::UnreachableInst>(instruction))
+                    return reject("Native v3 source Drop has an unbounded exit");
+                if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                        &instruction)) {
+                    const auto* callee = call->getCalledFunction();
+                    if (!callee || callee == drop ||
+                        callee->getName() == "rt_dealloc" ||
+                        callee->hasFnAttribute(llvm::Attribute::NoReturn))
+                        return reject("Native v3 source Drop has an unbounded call");
+                }
+            }
         if (index == 0) continue;
         if (node.parentIndex >= index ||
             cleanupNodes[node.parentIndex].allocationSize < sizeof(void*) ||

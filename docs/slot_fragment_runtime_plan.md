@@ -1770,8 +1770,11 @@ cleanup, and matches each cleanup instruction and owner operand to the
 verified transfer failure block. Each recursive Drop call must resolve to a
 defined internal source body in the same generated module with the exact
 `void(ptr)` C profile; a declaration, external body or changed calling
-convention fails the producer check. The contents of those source Drop bodies
-and any artifact proof claim remain separate.
+convention fails the producer check. Their generated bodies also reject direct
+`rt_dealloc`, self-calls, indirect calls, explicit nonreturn exits and calls
+marked nonreturn. Synthetic root and nested Drop mutations exercise the
+direct-deallocation check. Effects of other callees, termination of loops and
+any artifact proof claim remain separate.
 The producer-side host closed-graph check composes all of those branch and
 preflight verifiers. It requires exactly 18 reachable blocks, three entry
 scratch allocations, four non-volatile loads, four stores to the checked
@@ -2563,7 +2566,8 @@ not a public ABI decision or stable-release approval:
    do not Drop. Up to three structs in one ownership chain now have recursive
    cleanup and ordered Drop/deallocation proof. The cleanup verifier also
    binds every recursive Drop call to a defined internal generated source
-   body with the exact C profile; it does not prove that body's effects. A
+   body with the exact C profile and rejects direct deallocation and nonreturn
+   paths. Other Drop-body effects still need proof. A
    bounded three-node fork with two independently owned fields now has ordered
    `?` Err and injected-failure
    cleanup evidence on both local platforms, including focused ASAN runs.

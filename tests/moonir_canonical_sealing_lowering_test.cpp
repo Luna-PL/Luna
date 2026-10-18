@@ -6397,6 +6397,24 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     if (acceptedExternalSourceDrop || acceptedMissingSourceDrop ||
         acceptedWrongSourceDropConvention || !restoredSourceDrop)
         return fail("Native v3 transfer accepted an unbound source Drop body");
+    llvm::IRBuilder<> sourceDropMutation(
+        ownedCleanupDrop->getEntryBlock().getTerminator());
+    auto* sourceDropDealloc = sourceDropMutation.CreateCall(
+        ownedCleanupDealloc,
+        {ownedCleanupDrop->getArg(0),
+         llvm::ConstantInt::get(ownedPairSize, 4),
+         llvm::ConstantInt::get(ownedPairSize, 4)});
+    const bool acceptedSourceDoubleDeallocation = verifyTransferGraph();
+    sourceDropDealloc->eraseFromParent();
+    auto* sourceDropEscape = llvm::BasicBlock::Create(
+        ownedPairContext, "unexpected.exit", ownedCleanupDrop);
+    llvm::IRBuilder<> sourceDropEscapeBuilder(sourceDropEscape);
+    sourceDropEscapeBuilder.CreateUnreachable();
+    const bool acceptedSourceNonreturnExit = verifyTransferGraph();
+    sourceDropEscape->eraseFromParent();
+    if (acceptedSourceDoubleDeallocation || acceptedSourceNonreturnExit ||
+        !verifyTransferGraph())
+        return fail("Native v3 transfer accepted an unsafe source Drop effect");
     auto* orphanTransferBlock = llvm::BasicBlock::Create(
         ownedPairContext, "orphan", ownedCleanupTransfer);
     llvm::IRBuilder<> orphanTransferBuilder(orphanTransferBlock);
@@ -6481,6 +6499,17 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     nestedCleanupDrop->setLinkage(llvm::Function::InternalLinkage);
     if (acceptedExternalNestedDrop || !verifyNestedCleanup())
         return fail("Native v3 transfer accepted an unbound nested Drop body");
+    llvm::IRBuilder<> nestedSourceMutation(
+        nestedCleanupDrop->getEntryBlock().getTerminator());
+    auto* nestedSourceDealloc = nestedSourceMutation.CreateCall(
+        ownedCleanupDealloc,
+        {nestedCleanupDrop->getArg(0),
+         llvm::ConstantInt::get(ownedPairSize, 4),
+         llvm::ConstantInt::get(ownedPairSize, 4)});
+    const bool acceptedNestedDoubleDeallocation = verifyNestedCleanup();
+    nestedSourceDealloc->eraseFromParent();
+    if (acceptedNestedDoubleDeallocation || !verifyNestedCleanup())
+        return fail("Native v3 transfer accepted nested source deallocation");
     nestedDropCall->setArgOperand(0, ownedCleanupOwner);
     const bool acceptedParentAsNestedDrop = verifyNestedCleanup();
     nestedDropCall->setArgOperand(0, nestedOwnerLoad);
