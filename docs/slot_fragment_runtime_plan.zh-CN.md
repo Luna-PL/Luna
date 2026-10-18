@@ -1339,8 +1339,10 @@ Drop。Runtime carrier 在重跑时通过 Windows Clang64 ASAN 聚焦 canonical 
 不透明 lease token，在单一准入形态下证明候选提交点及 lease 行为。私有六参数
 候选入口与状态域现已固定，并在保留的 JIT module 中绑定冻结源码事实。下一步将
 该类型化证明纳入生产生成的 v3 行与 `PinnedBinding`。v3 loader 现拒绝 v1
-入口别名，并验证暂存镜像内独立解析的六参数符号。只读查询仅暴露候选存在性；
-仍须实现生产 descriptor 绑定及固定的类型化调用路径。
+入口别名，并验证暂存镜像内独立解析的六参数符号。读取返回的 descriptor 和
+导出表前，loader 还检查两者都属于该镜像；独立夹具将其他字段有效的 metadata
+复制到堆上，验证这两种外来指针均被拒绝。只读查询仅暴露候选存在性；仍须实现
+生产 descriptor 绑定及固定的类型化调用路径。
 覆盖每个真实失败阶段的生成入口测试，以及 Runtime 所有的 handle／Drop 在各支持
 目标上的验证完成后，才能开放窄形态的 verifier／export 门禁。不能
 原地扩展 Native v1 行。

@@ -1,4 +1,9 @@
 #include "runtime/NativeArtifactABI.h"
+#if defined(LUNA_TEST_V3_FOREIGN_DESCRIPTOR) || \
+    defined(LUNA_TEST_V3_FOREIGN_EXPORT_TABLE)
+#include <stdlib.h>
+#include <string.h>
+#endif
 #if defined(LUNA_TEST_V3_DEPENDENCY_ENTRY) || \
     defined(LUNA_TEST_V4_DEPENDENCY_ENTRY) || \
     defined(LUNA_TEST_V4_FOREIGN_DESCRIPTOR) || \
@@ -120,7 +125,11 @@ static const LunaNativeExportDescriptorV3 owned_exports[] = {{
     LUNA_TEST_V3_ENTRY,
 }};
 
+#ifdef LUNA_TEST_V3_FOREIGN_EXPORT_TABLE
+static LunaNativeLibraryDescriptorV3 owned_library
+#else
 static const LunaNativeLibraryDescriptorV3 owned_library
+#endif
     LUNA_TEST_SECTION(LUNA_TEST_DESCRIPTOR_V3_SECTION) = {
         LUNA_NATIVE_DESCRIPTOR_MAGIC_V3,
         LUNA_NATIVE_DESCRIPTOR_ABI_V3,
@@ -137,7 +146,20 @@ static const LunaNativeLibraryDescriptorV3 owned_library
 
 LUNA_TEST_EXPORT const LunaNativeLibraryDescriptorV3*
 luna_native_library_descriptor_v3(void) {
+#ifdef LUNA_TEST_V3_FOREIGN_DESCRIPTOR
+    LunaNativeLibraryDescriptorV3* foreign = malloc(sizeof(owned_library));
+    if (!foreign) return NULL;
+    memcpy(foreign, &owned_library, sizeof(owned_library));
+    return foreign;
+#elif defined(LUNA_TEST_V3_FOREIGN_EXPORT_TABLE)
+    LunaNativeExportDescriptorV3* foreign = malloc(sizeof(owned_exports));
+    if (!foreign) return NULL;
+    memcpy(foreign, owned_exports, sizeof(owned_exports));
+    owned_library.exports = foreign;
     return &owned_library;
+#else
+    return &owned_library;
+#endif
 }
 #endif
 
