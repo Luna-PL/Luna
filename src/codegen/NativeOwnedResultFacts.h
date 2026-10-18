@@ -166,4 +166,10 @@ bool verifyNativeOwnedResultTransferContextRefPreflight(
     uint32_t invalidTargetStatus, uint32_t unexpectedStatus,
     std::string& error);
 
+// Checks the transfer entry's output pointer guards and empty owner cell
+// before context preflight. Both rejection edges return invalid output.
+bool verifyNativeOwnedResultTransferOutputOwnerGates(
+    const llvm::Module& generated, const std::string& transferLinkageName,
+    uint32_t invalidOutputStatus, std::string& error);
+
 } // namespace luna::codegen

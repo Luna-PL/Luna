@@ -1725,8 +1725,12 @@ The transfer's context/Ref preflight check now requires the original parent
 and borrowed Ref, frozen Slot/Contract strings and exact Runtime status
 switches. Its failure blocks return statuses `4` through `7` without output
 writes, while the source body has only the successful Ref-check predecessor.
-The transfer entry's output and owner-cell gates and the full host status
-graph remain separate proof work.
+The transfer entry now also has an independent output and owner-cell gate
+check. All three outputs must be non-null, ABI-aligned and pairwise disjoint
+before any memory access. Only then may it load the owner cell; an occupied
+cell or invalid output returns status `1` without writing outputs. The
+context check has that empty-cell edge as its sole predecessor. The full host
+status graph remains separate proof work.
 
 The private generated transfer entry now consumes those source facts for the
 candidate owned-error shape and checks its emitted C calling convention,

@@ -5611,6 +5611,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "luna_native_owned_cleanup_transfer", ownedPairModule);
     auto* ownedCleanupStart = llvm::BasicBlock::Create(
         ownedPairContext, "entry", ownedCleanupTransfer);
+    auto* ownedCleanupCheckOwner = llvm::BasicBlock::Create(
+        ownedPairContext, "check.owner", ownedCleanupTransfer);
+    auto* ownedCleanupInvalidOutput = llvm::BasicBlock::Create(
+        ownedPairContext, "output.invalid", ownedCleanupTransfer);
     auto* ownedCleanupContext = llvm::BasicBlock::Create(
         ownedPairContext, "check.context", ownedCleanupTransfer);
     auto* ownedCleanupRef = llvm::BasicBlock::Create(
@@ -5642,7 +5646,52 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto* ownedCleanupCommit = llvm::BasicBlock::Create(
         ownedPairContext, "resource.commit", ownedCleanupTransfer);
     ownedPairBuilder.SetInsertPoint(ownedCleanupStart);
-    ownedPairBuilder.CreateBr(ownedCleanupContext);
+    auto* transferTagNonnull = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateIsNotNull(ownedCleanupTransfer->getArg(2)));
+    auto* transferScalarNonnull = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateIsNotNull(ownedCleanupTransfer->getArg(3)));
+    auto* transferOwnerNonnull = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateIsNotNull(ownedCleanupTransfer->getArg(4)));
+    auto* transferNonNull = ownedPairBuilder.CreateAnd(transferTagNonnull,
+        ownedPairBuilder.CreateAnd(transferScalarNonnull,
+                                   transferOwnerNonnull));
+    auto* transferTagAligned = ownedAligned(
+        ownedCleanupTransfer->getArg(2), alignof(uint32_t));
+    auto* transferScalarAligned = ownedAligned(
+        ownedCleanupTransfer->getArg(3), alignof(int32_t));
+    auto* transferOwnerAligned = ownedAligned(
+        ownedCleanupTransfer->getArg(4), alignof(void*));
+    auto* transferAligned = ownedPairBuilder.CreateAnd(transferNonNull,
+        ownedPairBuilder.CreateAnd(transferTagAligned,
+            ownedPairBuilder.CreateAnd(transferScalarAligned,
+                                       transferOwnerAligned)));
+    auto* transferTagScalarGap = ownedDisjoint(
+        ownedCleanupTransfer->getArg(2), sizeof(uint32_t),
+        ownedCleanupTransfer->getArg(3), sizeof(int32_t));
+    auto* transferTagOwnerGap = ownedDisjoint(
+        ownedCleanupTransfer->getArg(2), sizeof(uint32_t),
+        ownedCleanupTransfer->getArg(4), sizeof(void*));
+    auto* transferScalarOwnerGap = ownedDisjoint(
+        ownedCleanupTransfer->getArg(3), sizeof(int32_t),
+        ownedCleanupTransfer->getArg(4), sizeof(void*));
+    auto* transferOutputChecks = ownedPairBuilder.CreateAnd(transferAligned,
+        ownedPairBuilder.CreateAnd(transferTagScalarGap,
+            ownedPairBuilder.CreateAnd(transferTagOwnerGap,
+                                       transferScalarOwnerGap)));
+    auto* transferEntryBranch = ownedPairBuilder.CreateCondBr(
+        transferOutputChecks,
+        ownedCleanupCheckOwner, ownedCleanupInvalidOutput);
+    ownedPairBuilder.SetInsertPoint(ownedCleanupCheckOwner);
+    auto* transferOwnerLoad = ownedPairBuilder.CreateLoad(
+        ownedPairPtr, ownedCleanupTransfer->getArg(4));
+    auto* transferOwnerEmpty = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateIsNull(transferOwnerLoad));
+    auto* transferOwnerBranch = ownedPairBuilder.CreateCondBr(
+        transferOwnerEmpty, ownedCleanupContext, ownedCleanupInvalidOutput);
+    ownedPairBuilder.SetInsertPoint(ownedCleanupInvalidOutput);
+    auto* transferInvalidOutputReturn = ownedPairBuilder.CreateRet(
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST));
     auto ownedCleanupContextFunction = ownedPairModule.getOrInsertFunction(
         "luna_compiler_fragment_context_check", ownedPairI32,
         ownedPairPtr);
@@ -6017,6 +6066,72 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         acceptedWrongUnexpectedStatus || acceptedWrongRefDefault ||
         acceptedPreflightOutputWrite || !verifyContextRefPreflight())
         return fail("Native v3 transfer accepted altered context/Ref preflight");
+    const auto verifyTransferOutputGates = [&] {
+        return luna::codegen::verifyNativeOwnedResultTransferOutputOwnerGates(
+            ownedPairModule, ownedCleanupTransfer->getName().str(),
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST,
+            ownedSourceError);
+    };
+    if (!verifyTransferOutputGates())
+        return fail("Native v3 transfer lost output and owner gates");
+    transferTagNonnull->setOperand(0, ownedCleanupTransfer->getArg(0));
+    const bool acceptedWrongTransferTagGuard = verifyTransferOutputGates();
+    transferTagNonnull->setOperand(0, ownedCleanupTransfer->getArg(2));
+    transferScalarNonnull->setPredicate(llvm::ICmpInst::ICMP_EQ);
+    const bool acceptedNullTransferScalar = verifyTransferOutputGates();
+    transferScalarNonnull->setPredicate(llvm::ICmpInst::ICMP_NE);
+    transferOwnerNonnull->setOperand(0, ownedCleanupTransfer->getArg(1));
+    const bool acceptedWrongTransferOwnerGuard = verifyTransferOutputGates();
+    transferOwnerNonnull->setOperand(0, ownedCleanupTransfer->getArg(4));
+    transferOwnerAligned->setPredicate(llvm::ICmpInst::ICMP_NE);
+    const bool acceptedWrongTransferAlignment = verifyTransferOutputGates();
+    transferOwnerAligned->setPredicate(llvm::ICmpInst::ICMP_EQ);
+    auto* transferShortGap = llvm::cast<llvm::ICmpInst>(
+        transferTagOwnerGap->getTrueValue());
+    transferShortGap->setOperand(1,
+        llvm::ConstantInt::get(ownedPairSize, 1));
+    const bool acceptedShortTransferRegion = verifyTransferOutputGates();
+    transferShortGap->setOperand(1,
+        llvm::ConstantInt::get(ownedPairSize, sizeof(uint32_t)));
+    transferEntryBranch->setCondition(transferAligned);
+    const bool acceptedMissingTransferGaps = verifyTransferOutputGates();
+    transferEntryBranch->setCondition(transferOutputChecks);
+    transferOwnerLoad->setOperand(0, ownedCleanupTransfer->getArg(3));
+    const bool acceptedWrongTransferOwnerCell = verifyTransferOutputGates();
+    transferOwnerLoad->setOperand(0, ownedCleanupTransfer->getArg(4));
+    transferOwnerEmpty->setPredicate(llvm::ICmpInst::ICMP_NE);
+    const bool acceptedOccupiedTransferOwner = verifyTransferOutputGates();
+    transferOwnerEmpty->setPredicate(llvm::ICmpInst::ICMP_EQ);
+    transferOwnerBranch->setSuccessor(0, ownedCleanupBodyDispatch);
+    const bool acceptedBypassedTransferContext = verifyTransferOutputGates();
+    transferOwnerBranch->setSuccessor(0, ownedCleanupContext);
+    transferInvalidOutputReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    const bool acceptedWrongTransferOutputStatus = verifyTransferOutputGates();
+    transferInvalidOutputReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST));
+    llvm::IRBuilder<> transferPrematureBuilder(transferEntryBranch);
+    auto* transferPrematureLoad = transferPrematureBuilder.CreateLoad(
+        ownedPairPtr, ownedCleanupTransfer->getArg(4));
+    const bool acceptedPrematureTransferRead = verifyTransferOutputGates();
+    transferPrematureLoad->eraseFromParent();
+    llvm::IRBuilder<> transferInvalidWriteBuilder(
+        transferInvalidOutputReturn);
+    auto* transferInvalidWrite = transferInvalidWriteBuilder.CreateStore(
+        llvm::ConstantInt::get(ownedPairI32, 1),
+        ownedCleanupTransfer->getArg(2));
+    const bool acceptedTransferFailureWrite = verifyTransferOutputGates();
+    transferInvalidWrite->eraseFromParent();
+    if (acceptedWrongTransferTagGuard || acceptedNullTransferScalar ||
+        acceptedWrongTransferOwnerGuard ||
+        acceptedWrongTransferAlignment || acceptedShortTransferRegion ||
+        acceptedMissingTransferGaps || acceptedWrongTransferOwnerCell ||
+        acceptedOccupiedTransferOwner || acceptedBypassedTransferContext ||
+        acceptedWrongTransferOutputStatus ||
+        acceptedPrematureTransferRead || acceptedTransferFailureWrite ||
+        !verifyTransferOutputGates())
+        return fail("Native v3 transfer accepted altered output gates");
     auto mutableOwnedError = std::find_if(
         tryApplyModule->typeTable.begin(), tryApplyModule->typeTable.end(),
         [&](const moon::TypeRecord& type) {

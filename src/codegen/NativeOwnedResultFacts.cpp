@@ -1446,4 +1446,116 @@ bool verifyNativeOwnedResultTransferContextRefPreflight(
     return true;
 }
 
+bool verifyNativeOwnedResultTransferOutputOwnerGates(
+    const llvm::Module& generated, const std::string& transferLinkageName,
+    uint32_t invalidOutputStatus, std::string& error) {
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    const auto* transfer = generated.getFunction(transferLinkageName);
+    if (!transfer || transfer->isDeclaration() || transfer->isVarArg() ||
+        transfer->getCallingConv() != llvm::CallingConv::C ||
+        !transfer->getReturnType()->isIntegerTy(32) ||
+        transfer->arg_size() != 6 || !transfer->hasExternalLinkage())
+        return reject("Native v3 transfer output gate lacks its C profile");
+    const auto* entry = &transfer->getEntryBlock();
+    const auto* entryBranch = llvm::dyn_cast<llvm::BranchInst>(
+        entry->getTerminator());
+    if (!entryBranch || !entryBranch->isConditional())
+        return reject("Native v3 transfer output gate lost its entry fork");
+    for (unsigned index = 2; index <= 4; ++index) {
+        const auto* output = transfer->getArg(index);
+        if (!output->getType()->isPointerTy() ||
+            output->getType()->getPointerAddressSpace() != 0 ||
+            !hasRequiredNonnullConjunct(entryBranch->getCondition(), output))
+            return reject("Native v3 transfer output gate lost a non-null check");
+    }
+    const std::array<uint64_t, 3> alignments = {
+        alignof(uint32_t), alignof(int32_t), alignof(void*)};
+    for (unsigned index = 0; index < alignments.size(); ++index)
+        if (!hasRequiredAlignmentConjunct(entryBranch->getCondition(),
+                transfer->getArg(index + 2), alignments[index]))
+            return reject("Native v3 transfer output gate lost an alignment check");
+    struct OutputPair {
+        unsigned left;
+        uint64_t leftSize;
+        unsigned right;
+        uint64_t rightSize;
+    };
+    const std::array<OutputPair, 3> pairs = {{
+        {2, sizeof(uint32_t), 3, sizeof(int32_t)},
+        {2, sizeof(uint32_t), 4, sizeof(void*)},
+        {3, sizeof(int32_t), 4, sizeof(void*)},
+    }};
+    for (const auto& pair : pairs)
+        if (!hasRequiredDisjointConjunct(entryBranch->getCondition(),
+                transfer->getArg(pair.left), pair.leftSize,
+                transfer->getArg(pair.right), pair.rightSize))
+            return reject("Native v3 transfer output gate lost a region gap");
+    for (const auto& instruction : *entry)
+        if (!llvm::isa<llvm::AllocaInst>(instruction) &&
+            !llvm::isa<llvm::PtrToIntInst>(instruction) &&
+            !llvm::isa<llvm::ICmpInst>(instruction) &&
+            !llvm::isa<llvm::BinaryOperator>(instruction) &&
+            !llvm::isa<llvm::SelectInst>(instruction) &&
+            !llvm::isa<llvm::BranchInst>(instruction))
+            return reject("Native v3 transfer output gate accesses memory early");
+    const auto* ownerBlock = entryBranch->getSuccessor(0);
+    const auto* invalid = entryBranch->getSuccessor(1);
+    if (ownerBlock == invalid || ownerBlock->size() != 3 ||
+        std::distance(llvm::pred_begin(ownerBlock),
+                      llvm::pred_end(ownerBlock)) != 1 ||
+        *llvm::pred_begin(ownerBlock) != entry)
+        return reject("Native v3 transfer owner gate bypasses output checks");
+    const auto* ownerLoad = llvm::dyn_cast<llvm::LoadInst>(
+        &ownerBlock->front());
+    const auto* empty = ownerLoad
+        ? llvm::dyn_cast<llvm::ICmpInst>(ownerLoad->getNextNode()) : nullptr;
+    const auto* ownerBranch = llvm::dyn_cast<llvm::BranchInst>(
+        ownerBlock->getTerminator());
+    if (!ownerLoad || ownerLoad->getPointerOperand() !=
+            transfer->getArg(4) ||
+        !ownerLoad->getType()->isPointerTy() ||
+        ownerLoad->getType()->getPointerAddressSpace() != 0 ||
+        !empty || empty->getPredicate() != llvm::ICmpInst::ICMP_EQ ||
+        !((empty->getOperand(0) == ownerLoad &&
+           llvm::isa<llvm::ConstantPointerNull>(empty->getOperand(1))) ||
+          (empty->getOperand(1) == ownerLoad &&
+           llvm::isa<llvm::ConstantPointerNull>(empty->getOperand(0)))) ||
+        !ownerBranch || !ownerBranch->isConditional() ||
+        ownerBranch->getCondition() != empty ||
+        ownerBranch->getSuccessor(1) != invalid)
+        return reject("Native v3 transfer owner gate lost its empty-cell check");
+    const auto* context = ownerBranch->getSuccessor(0);
+    const auto* contextCall = context->size() == 2
+        ? llvm::dyn_cast<llvm::CallInst>(&context->front()) : nullptr;
+    const auto* contextFunction = contextCall
+        ? contextCall->getCalledFunction() : nullptr;
+    if (!contextFunction || contextFunction->getName() !=
+            "luna_compiler_fragment_context_check" ||
+        contextCall->arg_size() != 1 ||
+        contextCall->getArgOperand(0) != transfer->getArg(0) ||
+        std::distance(llvm::pred_begin(context),
+                      llvm::pred_end(context)) != 1 ||
+        *llvm::pred_begin(context) != ownerBlock)
+        return reject("Native v3 transfer context bypasses owner gate");
+    const auto* returned = invalid->size() == 1
+        ? llvm::dyn_cast<llvm::ReturnInst>(
+            invalid->getTerminator()) : nullptr;
+    const auto* status = returned
+        ? llvm::dyn_cast_or_null<llvm::ConstantInt>(
+            returned->getReturnValue()) : nullptr;
+    if (!status || status->getBitWidth() != 32 ||
+        status->getZExtValue() != invalidOutputStatus ||
+        std::distance(llvm::pred_begin(invalid),
+                      llvm::pred_end(invalid)) != 2)
+        return reject("Native v3 transfer output gate changed failure status");
+    for (const auto* predecessor : llvm::predecessors(invalid))
+        if (predecessor != entry && predecessor != ownerBlock)
+            return reject("Native v3 transfer output failure has another edge");
+    error.clear();
+    return true;
+}
+
 } // namespace luna::codegen
