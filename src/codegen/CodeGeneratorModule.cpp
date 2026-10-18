@@ -2879,6 +2879,10 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                             *proof.mModule, hostEntry->getName().str(),
                             failure))
                         return false;
+                    if (!luna::codegen::verifyNativeOwnedResultHostOutputAlignment(
+                            *proof.mModule, hostEntry->getName().str(),
+                            failure))
+                        return false;
                     // The candidate callable profile has no test injection
                     // argument. Its one call fixes that argument to zero.
                     auto* candidateEntry = llvm::Function::Create(

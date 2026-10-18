@@ -5171,6 +5171,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     llvm::LLVMContext ownedPairContext;
     llvm::Module ownedPairModule("native-v3-entry-pair", ownedPairContext);
     auto* ownedPairI32 = llvm::Type::getInt32Ty(ownedPairContext);
+    auto* ownedPairSize = llvm::Type::getIntNTy(
+        ownedPairContext, sizeof(void*) * 8);
     auto* ownedPairPtr = llvm::PointerType::get(ownedPairContext, 0);
     auto* ownedPairBody = llvm::Function::Create(
         llvm::FunctionType::get(ownedPairI32, false),
@@ -5285,8 +5287,28 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto* ownedOutputNonNull = ownedPairBuilder.CreateAnd(
         ownedTagNonnull,
         ownedPairBuilder.CreateAnd(ownedScalarNonnull, ownedOwnerNonnull));
-    auto* ownedPreflightBranch = ownedPairBuilder.CreateCondBr(
+    const auto ownedAligned = [&](llvm::Value* output,
+                                  uint64_t alignment) {
+        auto* address = ownedPairBuilder.CreatePtrToInt(
+            output, ownedPairSize);
+        auto* masked = ownedPairBuilder.CreateAnd(address,
+            llvm::ConstantInt::get(ownedPairSize, alignment - 1));
+        return llvm::cast<llvm::ICmpInst>(ownedPairBuilder.CreateICmpEQ(
+            masked, llvm::ConstantInt::get(ownedPairSize, 0)));
+    };
+    auto* ownedTagAligned = ownedAligned(
+        ownedPairHost->getArg(2), alignof(uint32_t));
+    auto* ownedScalarAligned = ownedAligned(
+        ownedPairHost->getArg(3), alignof(int32_t));
+    auto* ownedOwnerAligned = ownedAligned(
+        ownedPairHost->getArg(4), alignof(void*));
+    auto* ownedOutputChecks = ownedPairBuilder.CreateAnd(
         ownedOutputNonNull,
+        ownedPairBuilder.CreateAnd(ownedTagAligned,
+            ownedPairBuilder.CreateAnd(ownedScalarAligned,
+                                       ownedOwnerAligned)));
+    auto* ownedPreflightBranch = ownedPairBuilder.CreateCondBr(
+        ownedOutputChecks,
         ownedHostCheckOwner, ownedHostInvalidOutput);
     ownedPairBuilder.SetInsertPoint(ownedHostCheckOwner);
     auto* ownedOwnerOutLoad = ownedPairBuilder.CreateLoad(
@@ -5464,11 +5486,40 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     ownedOwnerNonnull->setOperand(0, ownedPairHost->getArg(4));
     ownedPreflightBranch->setCondition(ownedTagNonnull);
     const bool acceptedMissingOutputGuards = verifyOwnedOutputNonNull();
-    ownedPreflightBranch->setCondition(ownedOutputNonNull);
+    ownedPreflightBranch->setCondition(ownedOutputChecks);
     if (acceptedWrongTagGuard || acceptedNullScalar ||
         acceptedWrongOwnerGuard || acceptedMissingOutputGuards ||
         !verifyOwnedOutputNonNull())
         return fail("Native v3 host accepted altered output non-null guards");
+    const auto verifyOwnedOutputAlignment = [&] {
+        return luna::codegen::verifyNativeOwnedResultHostOutputAlignment(
+            ownedPairModule, ownedPairHost->getName().str(),
+            ownedSourceError);
+    };
+    if (!verifyOwnedOutputAlignment())
+        return fail("Native v3 host lost its output alignment guards");
+    auto* ownedTagMask = llvm::cast<llvm::BinaryOperator>(
+        ownedTagAligned->getOperand(0));
+    ownedTagMask->setOperand(1, llvm::ConstantInt::get(ownedPairSize, 1));
+    const bool acceptedWeakTagAlignment = verifyOwnedOutputAlignment();
+    ownedTagMask->setOperand(1, llvm::ConstantInt::get(
+        ownedPairSize, alignof(uint32_t) - 1));
+    auto* ownedScalarAddress = llvm::cast<llvm::PtrToIntInst>(
+        llvm::cast<llvm::BinaryOperator>(
+            ownedScalarAligned->getOperand(0))->getOperand(0));
+    ownedScalarAddress->setOperand(0, ownedPairHost->getArg(2));
+    const bool acceptedWrongScalarAddress = verifyOwnedOutputAlignment();
+    ownedScalarAddress->setOperand(0, ownedPairHost->getArg(3));
+    ownedOwnerAligned->setPredicate(llvm::ICmpInst::ICMP_NE);
+    const bool acceptedInvertedOwnerAlignment = verifyOwnedOutputAlignment();
+    ownedOwnerAligned->setPredicate(llvm::ICmpInst::ICMP_EQ);
+    ownedPreflightBranch->setCondition(ownedOutputNonNull);
+    const bool acceptedMissingAlignment = verifyOwnedOutputAlignment();
+    ownedPreflightBranch->setCondition(ownedOutputChecks);
+    if (acceptedWeakTagAlignment || acceptedWrongScalarAddress ||
+        acceptedInvertedOwnerAlignment || acceptedMissingAlignment ||
+        !verifyOwnedOutputAlignment())
+        return fail("Native v3 host accepted altered output alignment guards");
     auto mutableOwnedError = std::find_if(
         tryApplyModule->typeTable.begin(), tryApplyModule->typeTable.end(),
         [&](const moon::TypeRecord& type) {

@@ -30,25 +30,75 @@ bool boundedIdentity(const std::string& value) {
         }) && luna::driver::validNativeDescriptorUtf8(value);
 }
 
-bool hasRequiredNonnullConjunct(const llvm::Value* condition,
-                                const llvm::Value* output,
-                                unsigned remaining = 32) {
+template <typename Matcher>
+bool hasRequiredConjunct(const llvm::Value* condition,
+                         const Matcher& matches,
+                         unsigned remaining = 32) {
     if (!remaining) return false;
     if (const auto* conjunction = llvm::dyn_cast<llvm::BinaryOperator>(
             condition); conjunction &&
         conjunction->getOpcode() == llvm::Instruction::And &&
         conjunction->getType()->isIntegerTy(1))
-        return hasRequiredNonnullConjunct(conjunction->getOperand(0),
-                                          output, remaining - 1) ||
-            hasRequiredNonnullConjunct(conjunction->getOperand(1),
-                                       output, remaining - 1);
-    const auto* comparison = llvm::dyn_cast<llvm::ICmpInst>(condition);
-    return comparison &&
-        comparison->getPredicate() == llvm::ICmpInst::ICMP_NE &&
-        ((comparison->getOperand(0) == output &&
-          llvm::isa<llvm::ConstantPointerNull>(comparison->getOperand(1))) ||
-         (comparison->getOperand(1) == output &&
-          llvm::isa<llvm::ConstantPointerNull>(comparison->getOperand(0))));
+        return hasRequiredConjunct(conjunction->getOperand(0), matches,
+                                   remaining - 1) ||
+            hasRequiredConjunct(conjunction->getOperand(1), matches,
+                                remaining - 1);
+    return matches(condition);
+}
+
+bool hasRequiredNonnullConjunct(const llvm::Value* condition,
+                                const llvm::Value* output) {
+    return hasRequiredConjunct(condition, [output](const llvm::Value* value) {
+        const auto* comparison = llvm::dyn_cast<llvm::ICmpInst>(value);
+        return comparison &&
+            comparison->getPredicate() == llvm::ICmpInst::ICMP_NE &&
+            ((comparison->getOperand(0) == output &&
+              llvm::isa<llvm::ConstantPointerNull>(
+                  comparison->getOperand(1))) ||
+             (comparison->getOperand(1) == output &&
+              llvm::isa<llvm::ConstantPointerNull>(
+                  comparison->getOperand(0))));
+    });
+}
+
+bool hasRequiredAlignmentConjunct(const llvm::Value* condition,
+                                  const llvm::Value* output,
+                                  uint64_t alignment) {
+    return hasRequiredConjunct(condition,
+        [output, alignment](const llvm::Value* value) {
+            const auto* comparison = llvm::dyn_cast<llvm::ICmpInst>(value);
+            if (!comparison ||
+                comparison->getPredicate() != llvm::ICmpInst::ICMP_EQ)
+                return false;
+            const auto* masked = llvm::dyn_cast<llvm::BinaryOperator>(
+                comparison->getOperand(0));
+            const auto* zero = llvm::dyn_cast<llvm::ConstantInt>(
+                comparison->getOperand(1));
+            if (!masked || !zero || !zero->isZero()) {
+                masked = llvm::dyn_cast<llvm::BinaryOperator>(
+                    comparison->getOperand(1));
+                zero = llvm::dyn_cast<llvm::ConstantInt>(
+                    comparison->getOperand(0));
+            }
+            if (!masked || !zero || !zero->isZero() ||
+                masked->getOpcode() != llvm::Instruction::And)
+                return false;
+            const auto* address = llvm::dyn_cast<llvm::PtrToIntInst>(
+                masked->getOperand(0));
+            const auto* mask = llvm::dyn_cast<llvm::ConstantInt>(
+                masked->getOperand(1));
+            if (!address || !mask) {
+                address = llvm::dyn_cast<llvm::PtrToIntInst>(
+                    masked->getOperand(1));
+                mask = llvm::dyn_cast<llvm::ConstantInt>(
+                    masked->getOperand(0));
+            }
+            return address && mask &&
+                address->getPointerOperand() == output &&
+                address->getType()->isIntegerTy(sizeof(void*) * 8) &&
+                mask->getBitWidth() == sizeof(void*) * 8 &&
+                mask->getZExtValue() == alignment - 1;
+        });
 }
 
 } // namespace
@@ -690,6 +740,27 @@ bool verifyNativeOwnedResultHostOutputNonNull(
     if (!status || status->getZExtValue() !=
             LUNA_NATIVE_REF_RESULT_OWNER_INVALID_OUTPUT_V1)
         return reject("Native v3 host output check lost its failure status");
+    error.clear();
+    return true;
+}
+
+bool verifyNativeOwnedResultHostOutputAlignment(
+    const llvm::Module& generated, const std::string& hostLinkageName,
+    std::string& error) {
+    if (!verifyNativeOwnedResultHostOutputNonNull(
+            generated, hostLinkageName, error))
+        return false;
+    const auto* host = generated.getFunction(hostLinkageName);
+    const auto* condition = llvm::cast<llvm::BranchInst>(
+        host->getEntryBlock().getTerminator())->getCondition();
+    const std::array<uint64_t, 3> alignments = {
+        alignof(uint32_t), alignof(int32_t), alignof(void*)};
+    for (unsigned index = 0; index < alignments.size(); ++index)
+        if (!hasRequiredAlignmentConjunct(
+                condition, host->getArg(index + 2), alignments[index])) {
+            error = "Native v3 host output check lost an alignment guard";
+            return false;
+        }
     error.clear();
     return true;
 }

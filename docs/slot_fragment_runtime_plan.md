@@ -1700,7 +1700,9 @@ and Runtime lease check to the host arguments. An occupied cell returns status
 through these gates. The entry output-validity expression still needs proof.
 The producer-side output check now proves that the entry success edge requires
 the tag, scalar and owner output pointers all to be non-null. The failure edge
-returns status `1`. Alignment and pairwise non-overlap remain unproved.
+returns status `1`. A separate alignment check now requires the entry success
+edge to include the generated ABI alignment mask for each of those pointers.
+Pairwise non-overlap remains unproved.
 
 The private generated transfer entry now consumes those source facts for the
 candidate owned-error shape and checks its emitted C calling convention,

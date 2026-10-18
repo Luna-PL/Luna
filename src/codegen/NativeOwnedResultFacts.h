@@ -118,4 +118,10 @@ bool verifyNativeOwnedResultHostOutputNonNull(
     const llvm::Module& generated, const std::string& hostLinkageName,
     std::string& error);
 
+// Proves the entry success edge also requires ABI alignment of each output
+// pointer. Pairwise non-overlap remains a separate check.
+bool verifyNativeOwnedResultHostOutputAlignment(
+    const llvm::Module& generated, const std::string& hostLinkageName,
+    std::string& error);
+
 } // namespace luna::codegen
