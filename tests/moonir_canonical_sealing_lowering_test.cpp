@@ -6071,11 +6071,30 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         ownedCleanupTransfer->getArg(2));
     const bool acceptedEarlyOutputWrite = verifyOwnedCleanup();
     ownedEarlyWrite->eraseFromParent();
+    llvm::IRBuilder<> ownedScratchBuilder(transferEntryBranch);
+    auto* ownedCleanupScratch = ownedScratchBuilder.CreateAlloca(ownedPairI32);
+    auto* ownedScratchWrite = ownedEarlyWriteBuilder.CreateStore(
+        llvm::ConstantInt::get(ownedPairI32, 1), ownedCleanupScratch);
+    const bool acceptedLocalScratchWrite = verifyOwnedCleanup();
+    ownedScratchWrite->eraseFromParent();
+    ownedCleanupScratch->eraseFromParent();
+    auto* ownedVolatileRead = ownedEarlyWriteBuilder.CreateLoad(
+        ownedPairPtr, ownedCleanupTransfer->getArg(4));
+    ownedVolatileRead->setVolatile(true);
+    const bool acceptedVolatileCleanupRead = verifyOwnedCleanup();
+    ownedVolatileRead->eraseFromParent();
+    auto* ownedTransferScalarBranch = llvm::cast<llvm::BranchInst>(
+        ownedCleanupScalar->getTerminator());
+    ownedTransferScalarBranch->setSuccessor(0, ownedCleanupNull);
+    const bool acceptedExtraNullResourceIngress = verifyOwnedCleanup();
+    ownedTransferScalarBranch->setSuccessor(0, ownedCleanupScalarFailure);
     if (acceptedWrongCleanupOwner || acceptedWrongCleanupSize ||
         acceptedWrongCleanupAlignment ||
         acceptedWrongDeallocationOwner ||
         acceptedInvertedCleanupGate || acceptedWrongCleanupStatus ||
-        acceptedEarlyOutputWrite || !verifyOwnedCleanup())
+        acceptedEarlyOutputWrite || acceptedLocalScratchWrite ||
+        acceptedVolatileCleanupRead ||
+        acceptedExtraNullResourceIngress || !verifyOwnedCleanup())
         return fail("Native v3 transfer accepted altered injected cleanup");
     const auto verifyScalarFork = [&] {
         return luna::codegen::verifyNativeOwnedResultTransferScalarFork(

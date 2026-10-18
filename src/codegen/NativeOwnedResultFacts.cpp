@@ -1338,6 +1338,9 @@ bool verifyNativeOwnedResultTransferInjectedCleanup(
             constant->getZExtValue() == status;
     };
     if (!statusReturn(nullResource, invalidResourceStatus) ||
+        std::distance(llvm::pred_begin(nullResource),
+                      llvm::pred_end(nullResource)) != 1 ||
+        *llvm::pred_begin(nullResource) != resource ||
         std::distance(llvm::pred_begin(valid),
                       llvm::pred_end(valid)) != 1 ||
         *llvm::pred_begin(valid) != resource || valid->size() != 2)
@@ -1373,10 +1376,9 @@ bool verifyNativeOwnedResultTransferInjectedCleanup(
         return reject("Native v3 transfer cleanup changed its failure status");
     std::vector<const llvm::CallInst*> calls;
     for (const auto& instruction : *failed) {
-        if (const auto* store = llvm::dyn_cast<llvm::StoreInst>(
-                &instruction))
-            if (!llvm::isa<llvm::AllocaInst>(store->getPointerOperand()))
-                return reject("Native v3 transfer cleanup writes outside local scratch");
+        if (llvm::isa<llvm::StoreInst>(instruction) ||
+            llvm::isa<llvm::AllocaInst>(instruction))
+            return reject("Native v3 transfer cleanup added scratch mutation");
         if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
                 &instruction)) {
             if (!call->getCalledFunction() ||
@@ -1390,7 +1392,9 @@ bool verifyNativeOwnedResultTransferInjectedCleanup(
                     call->getArgOperand(index) == transfer->getArg(4))
                     return reject("Native v3 transfer cleanup passed an output cell");
             calls.push_back(call);
-        }
+        } else if (!llvm::isa<llvm::ReturnInst>(instruction) &&
+                   instruction.mayHaveSideEffects())
+            return reject("Native v3 transfer cleanup added a side effect");
     }
     if (calls.size() != expectedCleanupCalls.size() ||
         calls.front()->arg_size() < 1 ||

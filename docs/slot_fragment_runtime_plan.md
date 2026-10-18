@@ -1728,7 +1728,10 @@ owned-error failure after body dispatch. It traces the returned owner through
 the non-null and injection gates, checks the source-derived Drop call order,
 binds root Drop and `rt_dealloc` to that owner and the physical allocation
 size/alignment, rejects direct output-cell writes in the cleanup block, and
-requires status `3`.
+requires status `3`. The failure block now also rejects local scratch writes,
+volatile reads and other unrecognized side effects. The null-owner status `2`
+block has only the resource gate as predecessor. Nested Drop argument
+provenance and the transfer graph as a whole remain separate proof work.
 The descriptor's error-value layout describes its pointer carrier, which can
 differ from the heap allocation layout. A separate producer-side scalar-fork
 check now binds body tag `1` to the scalar Ok arm, requires its injection

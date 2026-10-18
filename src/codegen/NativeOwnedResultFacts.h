@@ -155,8 +155,10 @@ bool verifyNativeOwnedResultHostOutputDisjointness(
     std::string& error);
 
 // Checks the private transfer's injected owned-error failure path against
-// source-derived cleanup calls and physical owner allocation layout. This is
-// one failure path, not a proof of all transfer statuses.
+// source-derived cleanup calls and physical owner allocation layout. The
+// failure block has no scratch writes or other unrecognized side effects;
+// null owner has only the resource gate as predecessor. Other transfer
+// statuses remain separate checks.
 bool verifyNativeOwnedResultTransferInjectedCleanup(
     const llvm::Module& generated, const std::string& transferLinkageName,
     const NativeOwnedResultSourceFacts& source,
