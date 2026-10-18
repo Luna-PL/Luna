@@ -2,7 +2,9 @@
 #if defined(LUNA_TEST_V3_FOREIGN_DESCRIPTOR) || \
     defined(LUNA_TEST_V3_FOREIGN_EXPORT_TABLE) || \
     defined(LUNA_TEST_V3_FOREIGN_LIBRARY_ID) || \
-    defined(LUNA_TEST_V3_FOREIGN_ROW_ID)
+    defined(LUNA_TEST_V3_FOREIGN_ROW_ID) || \
+    defined(LUNA_TEST_V3_PAGE_SPANNING_ID)
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #endif
@@ -41,6 +43,9 @@
 static int32_t legacy_answer(void) { return 7; }
 #ifdef LUNA_TEST_V3_DESCRIPTOR
 typedef struct OwnedError { uint64_t marker; } OwnedError;
+#ifdef LUNA_TEST_V3_PAGE_SPANNING_ID
+static char spanning_package_id[32768];
+#endif
 LUNA_TEST_EXPORT int32_t owned_answer(
     const void* parent, const void* ref, uint32_t* tag,
     int32_t* scalar, void** owner, const void* code_lease) {
@@ -132,7 +137,8 @@ static const LunaNativeExportDescriptorV3 owned_exports[] = {{
 }};
 
 #if defined(LUNA_TEST_V3_FOREIGN_EXPORT_TABLE) || \
-    defined(LUNA_TEST_V3_FOREIGN_LIBRARY_ID)
+    defined(LUNA_TEST_V3_FOREIGN_LIBRARY_ID) || \
+    defined(LUNA_TEST_V3_PAGE_SPANNING_ID)
 static LunaNativeLibraryDescriptorV3 owned_library
 #else
 static const LunaNativeLibraryDescriptorV3 owned_library
@@ -177,6 +183,15 @@ luna_native_library_descriptor_v3(void) {
     if (!foreign) return NULL;
     memcpy(foreign, owned_exports[0].symbol_id, size);
     owned_exports[0].symbol_id = foreign;
+    return &owned_library;
+#elif defined(LUNA_TEST_V3_PAGE_SPANNING_ID)
+    // Place the NUL-terminated text across a 16 KiB boundary inside this image.
+    const uintptr_t start = (uintptr_t)spanning_package_id;
+    const uintptr_t boundary = (start + 2u + 16383u) & ~(uintptr_t)16383u;
+    char* spanning = (char*)(boundary - 2u);
+    memcpy(spanning, owned_library.package_id,
+           strlen(owned_library.package_id) + 1);
+    owned_library.package_id = spanning;
     return &owned_library;
 #else
     return &owned_library;

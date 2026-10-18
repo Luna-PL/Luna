@@ -1793,12 +1793,14 @@ typed proof into a generated v3 row and `PinnedBinding`. The v3 loader now
 rejects v1 entry aliases and validates an independently resolved six-argument
 symbol in the staged image. It also checks that the returned descriptor and
 export table belong to that image before reading them, and checks the image
-origin of each library and row identity string before decoding it. Independent
-fixtures copy otherwise valid metadata or unchanged identity text to the heap
-to exercise all four rejections. Its read-only lookup exposes only candidate
-presence; a production descriptor binding and pinned typed call path are still
-required. Generated entry
-tests for every real failure phase, plus Runtime-owned handle/Drop behavior
+origin of each library and row identity string before decoding it. For v3,
+the bounded decoder also checks each page through the terminating NUL against
+the staged image before reading it; a page-spanning in-image string is accepted.
+Independent fixtures copy otherwise valid metadata or unchanged identity text
+to the heap to exercise all four foreign-storage rejections. Its read-only
+lookup exposes only candidate presence; a production descriptor binding and
+pinned typed call path are still required. Generated entry tests for every real
+failure phase, plus Runtime-owned handle/Drop behavior
 across supported targets, are required before opening the narrow verifier and
 export gate. Native v1 rows must not be extended in place.
 An audit build exposed a nearer fail-closed requirement: Native v1 accepted

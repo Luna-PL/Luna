@@ -642,7 +642,7 @@ endforeach()
 # validation-only until the generated host carrier and status path exist.
 set(v3_variants valid bad-row-size bad-profile bad-slot-digest bad-identity
     bad-entry-pointer bad-linkage foreign-descriptor foreign-export-table
-    foreign-library-id foreign-row-id)
+    foreign-library-id foreign-row-id page-spanning-id)
 if(NOT WIN32)
     list(APPEND v3_variants dependency-entry)
 endif()
@@ -676,6 +676,8 @@ foreach(v3_variant IN LISTS v3_variants)
         list(APPEND v3_defines -DLUNA_TEST_V3_FOREIGN_LIBRARY_ID)
     elseif(v3_variant STREQUAL "foreign-row-id")
         list(APPEND v3_defines -DLUNA_TEST_V3_FOREIGN_ROW_ID)
+    elseif(v3_variant STREQUAL "page-spanning-id")
+        list(APPEND v3_defines -DLUNA_TEST_V3_PAGE_SPANNING_ID)
     elseif(v3_variant STREQUAL "dependency-entry")
         list(APPEND v3_defines -DLUNA_TEST_V3_DEPENDENCY_ENTRY)
     endif()
@@ -751,6 +753,12 @@ foreach(v3_variant IN LISTS v3_variants)
                 "legacy call: ${v3_legacy_call_error}\n"
                 "candidate: ${v3_candidate_error}\n"
                 "generation: ${v3_generation_error}")
+        endif()
+    elseif(v3_variant STREQUAL "page-spanning-id")
+        if(NOT v3_load_result EQUAL 0)
+            message(FATAL_ERROR
+                "independent Native v3 page-spanning identity was rejected.\n"
+                "${v3_load_error}")
         endif()
     else()
         if(v3_variant STREQUAL "bad-row-size" OR

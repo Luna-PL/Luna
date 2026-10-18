@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -292,6 +293,71 @@ bool descriptorString(const char* source, std::string& value) {
         validNativeDescriptorUtf8(value);
 }
 
+enum class NativeImageStringStatus { Valid, Invalid, Foreign };
+
+size_t nativeImagePageSize() {
+#ifdef _WIN32
+    SYSTEM_INFO system{};
+    GetSystemInfo(&system);
+    return system.dwPageSize ? system.dwPageSize : 1;
+#else
+    const long size = ::sysconf(_SC_PAGESIZE);
+    return size > 0 ? static_cast<size_t>(size) : 1;
+#endif
+}
+
+bool nativeDescriptorPageInStagedImage(
+    void* library, const std::string& stagedPath, const void* address) {
+    if (!nativeAddressInStagedImage(library, stagedPath, address))
+        return false;
+#ifdef _WIN32
+    MEMORY_BASIC_INFORMATION region{};
+    if (VirtualQuery(address, &region, sizeof(region)) != sizeof(region) ||
+        region.State != MEM_COMMIT || (region.Protect & PAGE_GUARD) != 0)
+        return false;
+    switch (region.Protect & 0xff) {
+    case PAGE_READONLY:
+    case PAGE_READWRITE:
+    case PAGE_WRITECOPY:
+    case PAGE_EXECUTE_READ:
+    case PAGE_EXECUTE_READWRITE:
+    case PAGE_EXECUTE_WRITECOPY:
+        return true;
+    default:
+        return false;
+    }
+#else
+    return true;
+#endif
+}
+
+NativeImageStringStatus nativeImageDescriptorString(
+    void* library, const std::string& stagedPath, const char* source,
+    std::string& value) {
+    value.clear();
+    if (!source) return NativeImageStringStatus::Foreign;
+    const auto start = reinterpret_cast<uintptr_t>(source);
+    const auto pageSize = nativeImagePageSize();
+    for (size_t length = 0; length < MaxNativeDescriptorString; ++length) {
+        if (start > std::numeric_limits<uintptr_t>::max() - length)
+            return NativeImageStringStatus::Foreign;
+        const auto address = start + length;
+        const auto* byte = reinterpret_cast<const char*>(address);
+        if ((length == 0 || address % pageSize == 0) &&
+            !nativeDescriptorPageInStagedImage(
+                library, stagedPath, byte))
+            return NativeImageStringStatus::Foreign;
+        if (*byte == '\0')
+            return !value.empty() &&
+                   value.find_first_of("\r\n\t") == std::string::npos &&
+                   validNativeDescriptorUtf8(value)
+                ? NativeImageStringStatus::Valid
+                : NativeImageStringStatus::Invalid;
+        value.push_back(*byte);
+    }
+    return NativeImageStringStatus::Invalid;
+}
+
 bool validateNativeDescriptor(
     void* handle, const NativeProofInfo& proof,
     const LunaNativeLibraryDescriptorV1*& descriptor,
@@ -471,20 +537,25 @@ bool validateNativeDescriptorV3(
         return false;
     }
     std::string packageId, packageVersion, targetAbi, compilerIdentity;
-    const char* libraryStrings[] = {
-        descriptor->package_id, descriptor->package_version,
-        descriptor->target_abi, descriptor->compiler_identity};
-    if (!std::all_of(std::begin(libraryStrings), std::end(libraryStrings),
-            [&](const char* value) {
-                return nativeAddressInStagedImage(handle, stagedPath, value);
-            })) {
+    const auto packageStatus = nativeImageDescriptorString(
+        handle, stagedPath, descriptor->package_id, packageId);
+    const auto versionStatus = nativeImageDescriptorString(
+        handle, stagedPath, descriptor->package_version, packageVersion);
+    const auto targetStatus = nativeImageDescriptorString(
+        handle, stagedPath, descriptor->target_abi, targetAbi);
+    const auto compilerStatus = nativeImageDescriptorString(
+        handle, stagedPath, descriptor->compiler_identity, compilerIdentity);
+    if (packageStatus == NativeImageStringStatus::Foreign ||
+        versionStatus == NativeImageStringStatus::Foreign ||
+        targetStatus == NativeImageStringStatus::Foreign ||
+        compilerStatus == NativeImageStringStatus::Foreign) {
         error = "Native v3 library identity is outside its verified image";
         return false;
     }
-    if (!descriptorString(descriptor->package_id, packageId) ||
-        !descriptorString(descriptor->package_version, packageVersion) ||
-        !descriptorString(descriptor->target_abi, targetAbi) ||
-        !descriptorString(descriptor->compiler_identity, compilerIdentity) ||
+    if (packageStatus != NativeImageStringStatus::Valid ||
+        versionStatus != NativeImageStringStatus::Valid ||
+        targetStatus != NativeImageStringStatus::Valid ||
+        compilerStatus != NativeImageStringStatus::Valid ||
         packageId != proof.packageId || packageVersion != proof.packageVersion ||
         targetAbi != proof.targetAbi || compilerIdentity != proof.compilerIdentity) {
         error = "Native v3 library descriptor identity does not match its proof";
@@ -525,18 +596,17 @@ bool validateNativeDescriptorV3(
             row.ref_slot_symbol_id, row.ref_slot_contract_id,
             row.result_type_id, row.error_type_id, row.error_abi_layout_id,
             row.error_drop_symbol_id, row.error_drop_contract_id};
-        if (!std::all_of(std::begin(rawIdentifiers), std::end(rawIdentifiers),
-                [&](const char* value) {
-                    return nativeAddressInStagedImage(handle, stagedPath, value);
-                })) {
-            error = "Native v3 export identity is outside its verified image";
-            return false;
-        }
         std::array<std::string, 10> identifiers;
         bool validIdentifiers = true;
-        for (size_t field = 0; field < identifiers.size(); ++field)
-            validIdentifiers &= descriptorString(
-                rawIdentifiers[field], identifiers[field]);
+        for (size_t field = 0; field < identifiers.size(); ++field) {
+            const auto status = nativeImageDescriptorString(
+                handle, stagedPath, rawIdentifiers[field], identifiers[field]);
+            if (status == NativeImageStringStatus::Foreign) {
+                error = "Native v3 export identity is outside its verified image";
+                return false;
+            }
+            validIdentifiers &= status == NativeImageStringStatus::Valid;
+        }
         if (row.abi_version != LUNA_NATIVE_DESCRIPTOR_ABI_V3 ||
             row.struct_size != sizeof(LunaNativeExportDescriptorV3) ||
             row.declaration_kind != LUNA_NATIVE_DECLARATION_FUNCTION_V1 ||
