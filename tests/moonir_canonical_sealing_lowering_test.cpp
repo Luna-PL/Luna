@@ -5226,6 +5226,77 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         acceptedChangedCallingConvention || acceptedExternalBody ||
         pairedOwnedV3.canonicalRow() != expectedOwnedV3Row)
         return fail("Native v3 candidate accepted a changed generated entry");
+    ownedPairHost->deleteBody();
+    auto* ownedPairDrop = llvm::Function::Create(
+        llvm::FunctionType::get(ownedPairI32, {ownedPairPtr}, false),
+        llvm::Function::ExternalLinkage,
+        "luna_native_owned_result_drop", ownedPairModule);
+    ownedPairBuilder.SetInsertPoint(llvm::BasicBlock::Create(
+        ownedPairContext, "entry", ownedPairDrop));
+    ownedPairBuilder.CreateRet(llvm::ConstantInt::get(ownedPairI32, 0));
+    auto* ownedPairAdoption = llvm::Function::Create(
+        llvm::FunctionType::get(ownedPairI32,
+            {ownedPairPtr, ownedPairPtr, ownedPairPtr, ownedPairPtr}, false),
+        llvm::Function::ExternalLinkage,
+        "luna_runtime_owned_result_adopt_v1", ownedPairModule);
+    auto* ownedHostStart = llvm::BasicBlock::Create(
+        ownedPairContext, "entry", ownedPairHost);
+    auto* ownedHostCommit = llvm::BasicBlock::Create(
+        ownedPairContext, "commit", ownedPairHost);
+    auto* ownedHostFailed = llvm::BasicBlock::Create(
+        ownedPairContext, "failed", ownedPairHost);
+    ownedPairBuilder.SetInsertPoint(ownedHostStart);
+    auto* ownedHostTag = ownedPairBuilder.CreateAlloca(ownedPairI32);
+    auto* ownedHostCell = ownedPairBuilder.CreateAlloca(ownedPairPtr);
+    auto* ownedHostValue = ownedPairBuilder.CreateLoad(
+        ownedPairPtr, ownedHostCell);
+    auto* ownedHostTagValue = ownedPairBuilder.CreateLoad(
+        ownedPairI32, ownedHostTag);
+    auto* ownedAdoptionCall = ownedPairBuilder.CreateCall(
+        ownedPairAdoption, {ownedHostValue, ownedPairDrop,
+                            ownedPairHost->getArg(5), ownedPairHost->getArg(4)});
+    auto* ownedAdoptionCheck = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateICmpEQ(
+            ownedAdoptionCall, llvm::ConstantInt::get(ownedPairI32, 0)));
+    ownedPairBuilder.CreateCondBr(ownedAdoptionCheck,
+                                  ownedHostCommit, ownedHostFailed);
+    ownedPairBuilder.SetInsertPoint(ownedHostCommit);
+    auto* ownedTagCommit = ownedPairBuilder.CreateStore(
+        ownedHostTagValue, ownedPairHost->getArg(2));
+    ownedPairBuilder.CreateRet(llvm::ConstantInt::get(ownedPairI32, 0));
+    ownedPairBuilder.SetInsertPoint(ownedHostFailed);
+    auto* ownedFailedDrop = ownedPairBuilder.CreateCall(
+        ownedPairDrop, {ownedHostCell});
+    auto* ownedFailedReturn = ownedPairBuilder.CreateRet(
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_NATIVE_REF_RESULT_OWNER_ADOPTION_FAILURE_V1));
+    const auto verifyOwnedAdoption = [&] {
+        return luna::codegen::verifyNativeOwnedResultHostAdoption(
+            ownedPairModule, ownedPairHost->getName().str(),
+            ownedPairDrop->getName().str(), ownedSourceError);
+    };
+    if (!verifyOwnedAdoption())
+        return fail("Native v3 host adoption lost its commit and cleanup fork");
+    ownedAdoptionCall->setArgOperand(2, ownedPairHost->getArg(0));
+    const bool acceptedWrongLease = verifyOwnedAdoption();
+    ownedAdoptionCall->setArgOperand(2, ownedPairHost->getArg(5));
+    ownedAdoptionCheck->setPredicate(llvm::ICmpInst::ICMP_NE);
+    const bool acceptedInvertedCommit = verifyOwnedAdoption();
+    ownedAdoptionCheck->setPredicate(llvm::ICmpInst::ICMP_EQ);
+    ownedFailedDrop->setArgOperand(0, ownedHostTag);
+    const bool acceptedWrongDropCell = verifyOwnedAdoption();
+    ownedFailedDrop->setArgOperand(0, ownedHostCell);
+    ownedFailedReturn->setOperand(0, llvm::ConstantInt::get(ownedPairI32, 0));
+    const bool acceptedWrongFailureStatus = verifyOwnedAdoption();
+    ownedFailedReturn->setOperand(0, llvm::ConstantInt::get(ownedPairI32,
+        LUNA_NATIVE_REF_RESULT_OWNER_ADOPTION_FAILURE_V1));
+    ownedTagCommit->setOperand(1, ownedPairHost->getArg(3));
+    const bool acceptedWrongTagCell = verifyOwnedAdoption();
+    ownedTagCommit->setOperand(1, ownedPairHost->getArg(2));
+    if (acceptedWrongLease || acceptedInvertedCommit || acceptedWrongDropCell ||
+        acceptedWrongFailureStatus || acceptedWrongTagCell ||
+        !verifyOwnedAdoption())
+        return fail("Native v3 host adoption accepted altered commit or cleanup");
     auto mutableOwnedError = std::find_if(
         tryApplyModule->typeTable.begin(), tryApplyModule->typeTable.end(),
         [&](const moon::TypeRecord& type) {

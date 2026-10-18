@@ -90,4 +90,11 @@ bool derivePairedNativeOwnedResultDescriptorV3Candidate(
     const std::string& hostLinkageName,
     NativeOwnedResultDescriptorV3Candidate& candidate, std::string& error);
 
+// Proves the owned-error adoption fork: the identified final tag-store block
+// is reached only from successful adoption, while the failure edge drops the
+// same local owner cell and returns the versioned failure status.
+bool verifyNativeOwnedResultHostAdoption(
+    const llvm::Module& generated, const std::string& hostLinkageName,
+    const std::string& dropLinkageName, std::string& error);
+
 } // namespace luna::codegen

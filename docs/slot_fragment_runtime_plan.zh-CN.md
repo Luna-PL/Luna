@@ -1260,6 +1260,11 @@ wrapper linkage、固定 profile、冻结的错误类型大小／对齐及十个
 已定义的七参数宿主 wrapper、把测试注入参数固定为零，并返回其状态。私有 JIT
 路径已执行该校验；宿主 wrapper 的完整失败行为和产物 proof 声明仍未由此证明。
 Luna 仍不生成 v3 行，也不赋予可调用的 generation profile。
+生产侧 adoption 分支校验现将 Runtime 收养调用绑定到返回的 owner、精确生成的
+Drop 入口、代码 lease 和调用方 owner cell。只有成功状态能进入所核对的最终标签
+写入块；失败边对同一局部 owner cell 执行 Drop 并返回状态 `8`。私有 JIT 路径
+已执行该校验，且篡改 lease、分支、Drop、失败状态或标签目标均被拒绝。输出预检、
+transfer 失败清理及宿主状态图的整体性质仍需单独的生产证明。
 
 私有生成的 transfer 入口现对候选拥有型 Err 形态消费这些源码事实，核对生成的 C
 调用约定、参数数目、返回类型、源码 linkage 及错误类型。它的六个参数依次是

@@ -2863,6 +2863,10 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                         failure = "private Ref Result host transfer lost its commit or cleanup path";
                         return false;
                     }
+                    if (!luna::codegen::verifyNativeOwnedResultHostAdoption(
+                            *proof.mModule, hostEntry->getName().str(),
+                            dropEntry->getName().str(), failure))
+                        return false;
                     // The candidate callable profile has no test injection
                     // argument. Its one call fixes that argument to zero.
                     auto* candidateEntry = llvm::Function::Create(

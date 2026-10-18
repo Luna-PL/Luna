@@ -1682,6 +1682,13 @@ seven-argument host wrapper, fix test injection to zero, and return that
 status. The private JIT path runs this check. It does not yet prove the host
 wrapper's full failure behavior or make an artifact proof claim. Luna still
 emits no v3 row or callable generation profile.
+The producer-side adoption-fork check now binds the Runtime adoption call to
+the loaded owner, exact generated Drop entry, lease and caller's owner cell.
+Only its successful status reaches the identified final tag-store block; the
+failure edge drops that same local owner cell and returns status `8`. The
+private JIT path runs this check and rejects altered lease, branch, Drop,
+failure status or tag destination. Output preflight, transfer failure cleanup
+and the full host status graph still need independent production proof.
 
 The private generated transfer entry now consumes those source facts for the
 candidate owned-error shape and checks its emitted C calling convention,
