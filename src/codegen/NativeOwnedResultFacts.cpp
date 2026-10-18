@@ -633,6 +633,130 @@ bool verifyNativeOwnedResultHostTransferFork(
     return true;
 }
 
+bool verifyNativeOwnedResultHostScalarCommit(
+    const llvm::Module& generated, const std::string& hostLinkageName,
+    const std::string& transferLinkageName, std::string& error) {
+    if (!verifyNativeOwnedResultHostTransferFork(
+            generated, hostLinkageName, transferLinkageName, error))
+        return false;
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    const auto* host = generated.getFunction(hostLinkageName);
+    const auto* transfer = generated.getFunction(transferLinkageName);
+    const llvm::CallInst* transferCall = nullptr;
+    for (const auto& block : *host)
+        for (const auto& instruction : block)
+            if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                    &instruction); call && call->getCalledFunction() == transfer)
+                transferCall = call;
+    const auto* tagCell = transferCall->getArgOperand(2);
+    const auto* scalarCell = transferCall->getArgOperand(3);
+    const auto* ownerCell = transferCall->getArgOperand(4);
+    const auto* transferBranch = llvm::cast<llvm::BranchInst>(
+        transferCall->getParent()->getTerminator());
+    const auto* dispatched = transferBranch->getSuccessor(0);
+    if (dispatched->size() != 4)
+        return reject("Native v3 host scalar dispatch changed its instructions");
+    const auto* tagLoad = llvm::dyn_cast<llvm::LoadInst>(
+        &dispatched->front());
+    const auto* ownerLoad = llvm::dyn_cast<llvm::LoadInst>(
+        &*std::next(dispatched->begin()));
+    const auto* dispatchBranch = llvm::dyn_cast<llvm::BranchInst>(
+        dispatched->getTerminator());
+    const auto* resourceCheck = dispatchBranch && dispatchBranch->isConditional()
+        ? llvm::dyn_cast<llvm::ICmpInst>(dispatchBranch->getCondition())
+        : nullptr;
+    const auto equalsInteger = [](const llvm::ICmpInst* check,
+                                  const llvm::Value* value,
+                                  uint64_t expected) {
+        return check && check->getPredicate() == llvm::ICmpInst::ICMP_EQ &&
+            ((check->getOperand(0) == value &&
+              llvm::isa<llvm::ConstantInt>(check->getOperand(1)) &&
+              llvm::cast<llvm::ConstantInt>(check->getOperand(1))
+                  ->getZExtValue() == expected) ||
+             (check->getOperand(1) == value &&
+              llvm::isa<llvm::ConstantInt>(check->getOperand(0)) &&
+              llvm::cast<llvm::ConstantInt>(check->getOperand(0))
+                  ->getZExtValue() == expected));
+    };
+    if (!tagLoad || tagLoad->getPointerOperand() != tagCell ||
+        !tagLoad->getType()->isIntegerTy(32) ||
+        !ownerLoad || ownerLoad->getPointerOperand() != ownerCell ||
+        !ownerLoad->getType()->isPointerTy() ||
+        &*std::next(dispatched->begin(), 2) != resourceCheck ||
+        !equalsInteger(resourceCheck, tagLoad, 0))
+        return reject("Native v3 host scalar dispatch lost its transfer results");
+    const auto* resource = dispatchBranch->getSuccessor(0);
+    const auto* scalar = dispatchBranch->getSuccessor(1);
+    if (resource == scalar ||
+        std::distance(llvm::pred_begin(resource),
+                      llvm::pred_end(resource)) != 1 ||
+        *llvm::pred_begin(resource) != dispatched ||
+        std::distance(llvm::pred_begin(scalar),
+                      llvm::pred_end(scalar)) != 1 ||
+        *llvm::pred_begin(scalar) != dispatched || scalar->size() != 4)
+        return reject("Native v3 host scalar branch has another ingress");
+    const auto* scalarTagCheck = llvm::dyn_cast<llvm::ICmpInst>(
+        &scalar->front());
+    const auto* nullOwnerCheck = llvm::dyn_cast<llvm::ICmpInst>(
+        &*std::next(scalar->begin()));
+    const auto* both = llvm::dyn_cast<llvm::BinaryOperator>(
+        &*std::next(scalar->begin(), 2));
+    const auto* scalarBranch = llvm::dyn_cast<llvm::BranchInst>(
+        scalar->getTerminator());
+    if (!equalsInteger(scalarTagCheck, tagLoad, 1) ||
+        !nullOwnerCheck ||
+        nullOwnerCheck->getPredicate() != llvm::ICmpInst::ICMP_EQ ||
+        !((nullOwnerCheck->getOperand(0) == ownerLoad &&
+           llvm::isa<llvm::ConstantPointerNull>(
+               nullOwnerCheck->getOperand(1))) ||
+          (nullOwnerCheck->getOperand(1) == ownerLoad &&
+           llvm::isa<llvm::ConstantPointerNull>(
+               nullOwnerCheck->getOperand(0)))) ||
+        !both || both->getOpcode() != llvm::Instruction::And ||
+        !((both->getOperand(0) == scalarTagCheck &&
+           both->getOperand(1) == nullOwnerCheck) ||
+          (both->getOperand(1) == scalarTagCheck &&
+           both->getOperand(0) == nullOwnerCheck)) ||
+        !scalarBranch || !scalarBranch->isConditional() ||
+        scalarBranch->getCondition() != both)
+        return reject("Native v3 host scalar commit lost its tag or empty-owner gate");
+    const auto* committed = scalarBranch->getSuccessor(0);
+    const auto* invalid = scalarBranch->getSuccessor(1);
+    if (committed == invalid || committed == resource ||
+        invalid == resource ||
+        std::distance(llvm::pred_begin(committed),
+                      llvm::pred_end(committed)) != 1 ||
+        *llvm::pred_begin(committed) != scalar ||
+        std::distance(llvm::pred_begin(invalid),
+                      llvm::pred_end(invalid)) != 1 ||
+        *llvm::pred_begin(invalid) != scalar || committed->size() != 4)
+        return reject("Native v3 host scalar commit bypasses its gate");
+    const auto* scalarLoad = llvm::dyn_cast<llvm::LoadInst>(
+        &committed->front());
+    const auto* scalarStore = llvm::dyn_cast<llvm::StoreInst>(
+        &*std::next(committed->begin()));
+    const auto* tagStore = llvm::dyn_cast<llvm::StoreInst>(
+        &*std::next(committed->begin(), 2));
+    const auto* returned = llvm::dyn_cast<llvm::ReturnInst>(
+        committed->getTerminator());
+    const auto* status = returned
+        ? llvm::dyn_cast_or_null<llvm::ConstantInt>(
+            returned->getReturnValue()) : nullptr;
+    if (!scalarLoad || scalarLoad->getPointerOperand() != scalarCell ||
+        !scalarLoad->getType()->isIntegerTy(32) ||
+        !scalarStore || scalarStore->getValueOperand() != scalarLoad ||
+        scalarStore->getPointerOperand() != host->getArg(3) ||
+        !tagStore || tagStore->getValueOperand() != tagLoad ||
+        tagStore->getPointerOperand() != host->getArg(2) ||
+        !status || !status->isZero())
+        return reject("Native v3 host scalar commit changed its output or status");
+    error.clear();
+    return true;
+}
+
 bool verifyNativeOwnedResultHostOwnerLeaseGates(
     const llvm::Module& generated, const std::string& hostLinkageName,
     const std::string& transferLinkageName, std::string& error) {

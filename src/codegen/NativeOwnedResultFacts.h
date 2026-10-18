@@ -105,6 +105,13 @@ bool verifyNativeOwnedResultHostTransferFork(
     const llvm::Module& generated, const std::string& hostLinkageName,
     const std::string& transferLinkageName, std::string& error);
 
+// Proves that a successful transfer commits the scalar output and tag only
+// after tag 1 and a null local owner. The resource and invalid-result paths
+// have separate checks.
+bool verifyNativeOwnedResultHostScalarCommit(
+    const llvm::Module& generated, const std::string& hostLinkageName,
+    const std::string& transferLinkageName, std::string& error);
+
 // Proves that transfer is reachable only through the caller owner-cell-empty
 // check and the Runtime code-lease-live check. Both failed gates return their
 // versioned status. The preceding output validity expression is separate.

@@ -2911,6 +2911,10 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                             *proof.mModule, hostEntry->getName().str(),
                             transfer->getName().str(), failure))
                         return false;
+                    if (!luna::codegen::verifyNativeOwnedResultHostScalarCommit(
+                            *proof.mModule, hostEntry->getName().str(),
+                            transfer->getName().str(), failure))
+                        return false;
                     if (!luna::codegen::verifyNativeOwnedResultHostOwnerLeaseGates(
                             *proof.mModule, hostEntry->getName().str(),
                             transfer->getName().str(), failure))

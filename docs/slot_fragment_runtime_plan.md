@@ -1693,6 +1693,14 @@ The producer-side transfer-fork check also requires one call with the original
 parent and Ref, distinct local tag/scalar/owner scratch cells, a null-initialized
 owner cell and zero test injection. Its failure edge returns the transfer
 status directly; only success reaches the branch's success continuation.
+The producer-side host scalar-commit check now follows that continuation:
+it loads the tag and owner from the transfer scratch cells, dispatches tag
+`0` to the resource arm, and permits the scalar commit only for tag `1` with
+a null owner. That commit loads the same scalar scratch, writes the caller's
+scalar and tag cells in order, and returns status `0`. Mutation probes reject
+changed dispatch, owner gate, scratch, output destination and status. The
+invalid-resource continuation and full host status graph remain separate
+proof work.
 Output preflight is checked separately below; cleanup inside the transfer body
 remains unproved by these host checks.
 The producer-side owner/lease gate check now binds the caller owner-cell load

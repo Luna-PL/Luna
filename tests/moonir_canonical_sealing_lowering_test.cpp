@@ -5269,7 +5269,21 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto* ownedHostTransferFailed = llvm::BasicBlock::Create(
         ownedPairContext, "transfer.failed", ownedPairHost);
     auto* ownedHostStart = llvm::BasicBlock::Create(
-        ownedPairContext, "adopt", ownedPairHost);
+        ownedPairContext, "transferred", ownedPairHost);
+    auto* ownedHostResource = llvm::BasicBlock::Create(
+        ownedPairContext, "resource", ownedPairHost);
+    auto* ownedHostScalarBranch = llvm::BasicBlock::Create(
+        ownedPairContext, "scalar", ownedPairHost);
+    auto* ownedHostScalarCommit = llvm::BasicBlock::Create(
+        ownedPairContext, "scalar.commit", ownedPairHost);
+    auto* ownedHostAdopt = llvm::BasicBlock::Create(
+        ownedPairContext, "resource.adopt", ownedPairHost);
+    auto* ownedHostInvalidResourceCheck = llvm::BasicBlock::Create(
+        ownedPairContext, "resource.invalid.check", ownedPairHost);
+    auto* ownedHostInvalidResourceDrop = llvm::BasicBlock::Create(
+        ownedPairContext, "resource.invalid.drop", ownedPairHost);
+    auto* ownedHostInvalidResource = llvm::BasicBlock::Create(
+        ownedPairContext, "resource.invalid", ownedPairHost);
     auto* ownedHostCommit = llvm::BasicBlock::Create(
         ownedPairContext, "commit", ownedPairHost);
     auto* ownedHostFailed = llvm::BasicBlock::Create(
@@ -5382,10 +5396,40 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto* ownedTransferFailedReturn = ownedPairBuilder.CreateRet(
         ownedTransferCall);
     ownedPairBuilder.SetInsertPoint(ownedHostStart);
-    auto* ownedHostValue = ownedPairBuilder.CreateLoad(
-        ownedPairPtr, ownedHostCell);
     auto* ownedHostTagValue = ownedPairBuilder.CreateLoad(
         ownedPairI32, ownedHostTag);
+    auto* ownedHostValue = ownedPairBuilder.CreateLoad(
+        ownedPairPtr, ownedHostCell);
+    auto* ownedTagDispatchCheck = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateICmpEQ(ownedHostTagValue,
+            llvm::ConstantInt::get(ownedPairI32, 0)));
+    ownedPairBuilder.CreateCondBr(ownedTagDispatchCheck,
+        ownedHostResource, ownedHostScalarBranch);
+    ownedPairBuilder.SetInsertPoint(ownedHostScalarBranch);
+    auto* ownedScalarTagCheck = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateICmpEQ(ownedHostTagValue,
+            llvm::ConstantInt::get(ownedPairI32, 1)));
+    auto* ownedScalarOwnerCheck = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateIsNull(ownedHostValue));
+    auto* ownedScalarAnd = ownedPairBuilder.CreateAnd(
+        ownedScalarTagCheck, ownedScalarOwnerCheck);
+    auto* ownedScalarBranch = ownedPairBuilder.CreateCondBr(
+        ownedScalarAnd, ownedHostScalarCommit,
+        ownedHostInvalidResourceCheck);
+    ownedPairBuilder.SetInsertPoint(ownedHostScalarCommit);
+    auto* ownedScalarValue = ownedPairBuilder.CreateLoad(
+        ownedPairI32, ownedHostScalar);
+    auto* ownedScalarCommitStore = ownedPairBuilder.CreateStore(
+        ownedScalarValue, ownedPairHost->getArg(3));
+    auto* ownedScalarTagStore = ownedPairBuilder.CreateStore(
+        ownedHostTagValue, ownedPairHost->getArg(2));
+    auto* ownedScalarReturn = ownedPairBuilder.CreateRet(
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    ownedPairBuilder.SetInsertPoint(ownedHostResource);
+    ownedPairBuilder.CreateCondBr(
+        ownedPairBuilder.CreateIsNotNull(ownedHostValue),
+        ownedHostAdopt, ownedHostInvalidResource);
+    ownedPairBuilder.SetInsertPoint(ownedHostAdopt);
     auto* ownedAdoptionCall = ownedPairBuilder.CreateCall(
         ownedPairAdoption, {ownedHostValue, ownedPairDrop,
                             ownedPairHost->getArg(5), ownedPairHost->getArg(4)});
@@ -5398,6 +5442,16 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto* ownedTagCommit = ownedPairBuilder.CreateStore(
         ownedHostTagValue, ownedPairHost->getArg(2));
     ownedPairBuilder.CreateRet(llvm::ConstantInt::get(ownedPairI32, 0));
+    ownedPairBuilder.SetInsertPoint(ownedHostInvalidResourceCheck);
+    ownedPairBuilder.CreateCondBr(
+        ownedPairBuilder.CreateIsNotNull(ownedHostValue),
+        ownedHostInvalidResourceDrop, ownedHostInvalidResource);
+    ownedPairBuilder.SetInsertPoint(ownedHostInvalidResourceDrop);
+    ownedPairBuilder.CreateCall(ownedPairDrop, {ownedHostCell});
+    ownedPairBuilder.CreateBr(ownedHostInvalidResource);
+    ownedPairBuilder.SetInsertPoint(ownedHostInvalidResource);
+    ownedPairBuilder.CreateRet(llvm::ConstantInt::get(ownedPairI32,
+        LUNA_NATIVE_REF_RESULT_OWNER_INVALID_RESOURCE_V1));
     ownedPairBuilder.SetInsertPoint(ownedHostFailed);
     auto* ownedFailedDrop = ownedPairBuilder.CreateCall(
         ownedPairDrop, {ownedHostCell});
@@ -5461,6 +5515,57 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         acceptedUninitializedOwner || acceptedInvertedTransfer ||
         acceptedSwallowedStatus || !verifyOwnedTransfer())
         return fail("Native v3 host transfer accepted altered failure fork");
+    const auto verifyOwnedScalarCommit = [&] {
+        return luna::codegen::verifyNativeOwnedResultHostScalarCommit(
+            ownedPairModule, ownedPairHost->getName().str(),
+            ownedPairTransfer->getName().str(), ownedSourceError);
+    };
+    if (!verifyOwnedScalarCommit())
+        return fail((std::string("Native v3 host lost its scalar commit fork: ") +
+                    ownedSourceError).c_str());
+    ownedTagDispatchCheck->setPredicate(llvm::ICmpInst::ICMP_NE);
+    const bool acceptedInvertedTagDispatch = verifyOwnedScalarCommit();
+    ownedTagDispatchCheck->setPredicate(llvm::ICmpInst::ICMP_EQ);
+    ownedHostTagValue->setOperand(0, ownedHostScalar);
+    const bool acceptedWrongTagScratch = verifyOwnedScalarCommit();
+    ownedHostTagValue->setOperand(0, ownedHostTag);
+    ownedScalarTagCheck->setOperand(1,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    const bool acceptedWrongHostScalarTag = verifyOwnedScalarCommit();
+    ownedScalarTagCheck->setOperand(1,
+        llvm::ConstantInt::get(ownedPairI32, 1));
+    ownedScalarOwnerCheck->setPredicate(llvm::ICmpInst::ICMP_NE);
+    const bool acceptedNonNullScalarOwner = verifyOwnedScalarCommit();
+    ownedScalarOwnerCheck->setPredicate(llvm::ICmpInst::ICMP_EQ);
+    ownedScalarBranch->setCondition(ownedScalarTagCheck);
+    const bool acceptedMissingOwnerGate = verifyOwnedScalarCommit();
+    ownedScalarBranch->setCondition(ownedScalarAnd);
+    ownedScalarBranch->setSuccessor(0, ownedHostInvalidResourceCheck);
+    ownedScalarBranch->setSuccessor(1, ownedHostScalarCommit);
+    const bool acceptedInvertedScalarCommit = verifyOwnedScalarCommit();
+    ownedScalarBranch->setSuccessor(0, ownedHostScalarCommit);
+    ownedScalarBranch->setSuccessor(1, ownedHostInvalidResourceCheck);
+    ownedScalarValue->setOperand(0, ownedHostTag);
+    const bool acceptedWrongScalarScratch = verifyOwnedScalarCommit();
+    ownedScalarValue->setOperand(0, ownedHostScalar);
+    ownedScalarCommitStore->setOperand(1, ownedPairHost->getArg(2));
+    const bool acceptedWrongScalarOutput = verifyOwnedScalarCommit();
+    ownedScalarCommitStore->setOperand(1, ownedPairHost->getArg(3));
+    ownedScalarTagStore->setOperand(1, ownedPairHost->getArg(3));
+    const bool acceptedWrongScalarTagOutput = verifyOwnedScalarCommit();
+    ownedScalarTagStore->setOperand(1, ownedPairHost->getArg(2));
+    ownedScalarReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 1));
+    const bool acceptedWrongScalarStatus = verifyOwnedScalarCommit();
+    ownedScalarReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    if (acceptedInvertedTagDispatch || acceptedWrongTagScratch ||
+        acceptedWrongHostScalarTag || acceptedNonNullScalarOwner ||
+        acceptedMissingOwnerGate || acceptedInvertedScalarCommit ||
+        acceptedWrongScalarScratch || acceptedWrongScalarOutput ||
+        acceptedWrongScalarTagOutput || acceptedWrongScalarStatus ||
+        !verifyOwnedScalarCommit())
+        return fail("Native v3 host accepted altered scalar commit");
     const auto verifyOwnedGates = [&] {
         return luna::codegen::verifyNativeOwnedResultHostOwnerLeaseGates(
             ownedPairModule, ownedPairHost->getName().str(),
