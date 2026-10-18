@@ -257,4 +257,17 @@ bool verifyNativeOwnedResultTransferClosedGraph(
     const NativeOwnedResultTransferStatuses& statuses,
     std::string& error);
 
+// Closes the private transferred-owner Drop wrapper. It must validate and
+// clear the caller's owner cell before running a cleanup sequence equivalent
+// to the verified transfer failure block on that same owner.
+bool verifyNativeOwnedResultDropClosedGraph(
+    const llvm::Module& generated, const std::string& dropLinkageName,
+    const std::string& transferLinkageName,
+    const NativeOwnedResultSourceFacts& source,
+    const std::vector<std::string>& expectedCleanupCalls,
+    const std::vector<NativeOwnedResultCleanupNode>& cleanupNodes,
+    const std::vector<NativeOwnedResultCleanupStep>& cleanupSteps,
+    const NativeOwnedResultTransferStatuses& statuses,
+    std::string& error);
+
 } // namespace luna::codegen

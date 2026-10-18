@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <iterator>
+#include <unordered_map>
 #include <utility>
 
 namespace luna::codegen {
@@ -2306,6 +2307,173 @@ bool verifyNativeOwnedResultTransferClosedGraph(
         cleanupCalls != expectedCleanupCalls.size() || returns != 10 ||
         branches != 6 || switches != 2)
         return reject("Native v3 transfer graph changed its effects or exits");
+    error.clear();
+    return true;
+}
+
+bool verifyNativeOwnedResultDropClosedGraph(
+    const llvm::Module& generated, const std::string& dropLinkageName,
+    const std::string& transferLinkageName,
+    const NativeOwnedResultSourceFacts& source,
+    const std::vector<std::string>& expectedCleanupCalls,
+    const std::vector<NativeOwnedResultCleanupNode>& cleanupNodes,
+    const std::vector<NativeOwnedResultCleanupStep>& cleanupSteps,
+    const NativeOwnedResultTransferStatuses& statuses,
+    std::string& error) {
+    if (!verifyNativeOwnedResultTransferClosedGraph(
+            generated, transferLinkageName, source, expectedCleanupCalls,
+            cleanupNodes, cleanupSteps, statuses, error))
+        return false;
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    const auto* drop = generated.getFunction(dropLinkageName);
+    if (!drop || drop->isDeclaration() || drop->isVarArg() ||
+        !drop->hasExternalLinkage() ||
+        drop->getCallingConv() != llvm::CallingConv::C ||
+        !drop->getReturnType()->isIntegerTy(32) ||
+        drop->arg_size() != 1 ||
+        !drop->getArg(0)->getType()->isPointerTy() ||
+        drop->getArg(0)->getType()->getPointerAddressSpace() != 0 ||
+        drop->size() != 4)
+        return reject("Native v3 transferred Drop changed its C profile");
+    const auto* entry = &drop->getEntryBlock();
+    const auto* entryCheck = entry->size() == 2
+        ? llvm::dyn_cast<llvm::ICmpInst>(&entry->front()) : nullptr;
+    const auto* entryBranch = llvm::dyn_cast<llvm::BranchInst>(
+        entry->getTerminator());
+    const auto isNotNull = [](const llvm::ICmpInst* check,
+                              const llvm::Value* pointer) {
+        return check && check->getPredicate() == llvm::ICmpInst::ICMP_NE &&
+            ((check->getOperand(0) == pointer &&
+              llvm::isa<llvm::ConstantPointerNull>(check->getOperand(1))) ||
+             (check->getOperand(1) == pointer &&
+              llvm::isa<llvm::ConstantPointerNull>(check->getOperand(0))));
+    };
+    if (!isNotNull(entryCheck, drop->getArg(0)) ||
+        !entryBranch || !entryBranch->isConditional() ||
+        entryBranch->getCondition() != entryCheck)
+        return reject("Native v3 transferred Drop lost its owner-cell gate");
+    const auto* checkOwner = entryBranch->getSuccessor(0);
+    const auto* invalid = entryBranch->getSuccessor(1);
+    const auto* ownerLoad = checkOwner->size() == 3
+        ? llvm::dyn_cast<llvm::LoadInst>(&checkOwner->front()) : nullptr;
+    const auto* ownerCheck = ownerLoad
+        ? llvm::dyn_cast<llvm::ICmpInst>(ownerLoad->getNextNode()) : nullptr;
+    const auto* ownerBranch = llvm::dyn_cast<llvm::BranchInst>(
+        checkOwner->getTerminator());
+    if (!ownerLoad || ownerLoad->getPointerOperand() != drop->getArg(0) ||
+        !ownerLoad->getType()->isPointerTy() ||
+        ownerLoad->isVolatile() || ownerLoad->isAtomic() ||
+        !isNotNull(ownerCheck, ownerLoad) ||
+        !ownerBranch || !ownerBranch->isConditional() ||
+        ownerBranch->getCondition() != ownerCheck ||
+        ownerBranch->getSuccessor(1) != invalid)
+        return reject("Native v3 transferred Drop lost its nonempty owner gate");
+    const auto* owned = ownerBranch->getSuccessor(0);
+    const auto* invalidReturn = invalid->size() == 1
+        ? llvm::dyn_cast<llvm::ReturnInst>(invalid->getTerminator()) : nullptr;
+    const auto* invalidStatus = invalidReturn
+        ? llvm::dyn_cast_or_null<llvm::ConstantInt>(
+            invalidReturn->getReturnValue()) : nullptr;
+    if (owned == invalid || owned == entry || owned == checkOwner ||
+        invalid == entry || invalid == checkOwner ||
+        !invalidStatus || invalidStatus->getBitWidth() != 32 ||
+        invalidStatus->getZExtValue() != 1 ||
+        std::distance(llvm::pred_begin(checkOwner),
+                      llvm::pred_end(checkOwner)) != 1 ||
+        *llvm::pred_begin(checkOwner) != entry ||
+        std::distance(llvm::pred_begin(invalid),
+                      llvm::pred_end(invalid)) != 2 ||
+        std::distance(llvm::pred_begin(owned),
+                      llvm::pred_end(owned)) != 1 ||
+        *llvm::pred_begin(owned) != checkOwner)
+        return reject("Native v3 transferred Drop changed its status routes");
+    for (const auto* predecessor : llvm::predecessors(invalid))
+        if (predecessor != entry && predecessor != checkOwner)
+            return reject("Native v3 transferred Drop added a failure ingress");
+    if (owned->empty())
+        return reject("Native v3 transferred Drop lost its cleanup block");
+    const auto* clear = llvm::dyn_cast<llvm::StoreInst>(&owned->front());
+    if (!clear || clear->getPointerOperand() != drop->getArg(0) ||
+        !llvm::isa<llvm::ConstantPointerNull>(clear->getValueOperand()) ||
+        clear->isVolatile() || clear->isAtomic())
+        return reject("Native v3 transferred Drop lost the owner-cell clear");
+    const auto* transfer = generated.getFunction(transferLinkageName);
+    const auto* body = generated.getFunction(source.sourceLinkageName);
+    const llvm::CallInst* bodyCall = nullptr;
+    for (const auto& block : *transfer)
+        for (const auto& instruction : block)
+            if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                    &instruction); call && call->getCalledFunction() == body)
+                bodyCall = call;
+    const auto* dispatch = llvm::cast<llvm::BranchInst>(
+        bodyCall->getParent()->getTerminator());
+    const auto* resource = llvm::cast<llvm::BranchInst>(
+        dispatch->getSuccessor(1)->getTerminator());
+    const auto* returnedOwner = llvm::cast<llvm::IntToPtrInst>(
+        resource->getParent()->front().getNextNode());
+    const auto* valid = llvm::cast<llvm::BranchInst>(
+        resource->getSuccessor(0)->getTerminator());
+    const auto* reference = valid->getSuccessor(0);
+    std::unordered_map<const llvm::Value*, const llvm::Value*> mapped = {
+        {returnedOwner, ownerLoad}};
+    auto referenceInstruction = reference->begin();
+    auto ownedInstruction = std::next(owned->begin());
+    while (referenceInstruction != reference->end() &&
+           !llvm::isa<llvm::ReturnInst>(*referenceInstruction)) {
+        if (ownedInstruction == owned->end())
+            return reject("Native v3 transferred Drop shortened cleanup");
+        const auto* left = &*referenceInstruction++;
+        const auto* right = &*ownedInstruction++;
+        if (left->getOpcode() != right->getOpcode() ||
+            left->getType() != right->getType() ||
+            left->getNumOperands() != right->getNumOperands())
+            return reject("Native v3 transferred Drop changed cleanup instructions");
+        if (const auto* leftCall = llvm::dyn_cast<llvm::CallInst>(left)) {
+            const auto* rightCall = llvm::cast<llvm::CallInst>(right);
+            if (leftCall->getCalledFunction() !=
+                    rightCall->getCalledFunction() ||
+                leftCall->getCallingConv() != rightCall->getCallingConv() ||
+                leftCall->getTailCallKind() != rightCall->getTailCallKind() ||
+                leftCall->getAttributes() != rightCall->getAttributes())
+                return reject("Native v3 transferred Drop changed a cleanup call");
+        } else if (const auto* leftLoad = llvm::dyn_cast<llvm::LoadInst>(left)) {
+            const auto* rightLoad = llvm::cast<llvm::LoadInst>(right);
+            if (leftLoad->isVolatile() != rightLoad->isVolatile() ||
+                leftLoad->isAtomic() != rightLoad->isAtomic() ||
+                leftLoad->getAlign() != rightLoad->getAlign())
+                return reject("Native v3 transferred Drop changed a field load");
+        } else if (const auto* leftGep = llvm::dyn_cast<
+                       llvm::GetElementPtrInst>(left)) {
+            const auto* rightGep = llvm::cast<llvm::GetElementPtrInst>(right);
+            if (leftGep->getSourceElementType() !=
+                    rightGep->getSourceElementType() ||
+                leftGep->isInBounds() != rightGep->isInBounds())
+                return reject("Native v3 transferred Drop changed a field address");
+        } else {
+            return reject("Native v3 transferred Drop added a cleanup operation");
+        }
+        for (unsigned index = 0; index < left->getNumOperands(); ++index) {
+            const auto* operand = left->getOperand(index);
+            const auto found = mapped.find(operand);
+            if (right->getOperand(index) !=
+                (found == mapped.end() ? operand : found->second))
+                return reject("Native v3 transferred Drop changed an owner operand");
+        }
+        mapped.emplace(left, right);
+    }
+    const auto* returned = ownedInstruction != owned->end()
+        ? llvm::dyn_cast<llvm::ReturnInst>(&*ownedInstruction++) : nullptr;
+    const auto* success = returned
+        ? llvm::dyn_cast_or_null<llvm::ConstantInt>(
+            returned->getReturnValue()) : nullptr;
+    if (referenceInstruction == reference->end() ||
+        !llvm::isa<llvm::ReturnInst>(*referenceInstruction) ||
+        !success || success->getBitWidth() != 32 || !success->isZero() ||
+        ownedInstruction != owned->end())
+        return reject("Native v3 transferred Drop changed its success exit");
     error.clear();
     return true;
 }

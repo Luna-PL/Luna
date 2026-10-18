@@ -1763,7 +1763,12 @@ alignment. It checks preorder Drop and postorder deallocation for the admitted
 three-node Struct tree. A source-derived cleanup step list now checks every
 `i32` and nested-owner field read, including its offset, type and declaration
 order, and rejects extra instructions in the injected failure block. The
-generated transferred-Drop wrapper remains subsequent proof work.
+generated transferred-Drop wrapper now has a producer-side four-block
+closed-graph check. It requires a non-null caller cell and owner, clears the
+cell before cleanup, returns status `1` on either invalid input and `0` after
+cleanup, and matches each cleanup instruction and owner operand to the
+verified transfer failure block. Source Drop behavior and any artifact proof
+claim remain separate.
 The producer-side host closed-graph check composes all of those branch and
 preflight verifiers. It requires exactly 18 reachable blocks, three entry
 scratch allocations, four non-volatile loads, four stores to the checked

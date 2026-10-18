@@ -6503,6 +6503,94 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         llvm::ConstantInt::get(ownedPairSize, 4));
     if (!verifyTransferGraph())
         return fail("Native v3 transfer lost its restored cleanup graph");
+    auto* ownedCleanupDropWrapper = llvm::Function::Create(
+        llvm::FunctionType::get(ownedPairI32, {ownedPairPtr}, false),
+        llvm::Function::ExternalLinkage,
+        "luna_native_owned_cleanup_drop_wrapper", ownedPairModule);
+    auto* wrapperEntry = llvm::BasicBlock::Create(
+        ownedPairContext, "entry", ownedCleanupDropWrapper);
+    auto* wrapperCheck = llvm::BasicBlock::Create(
+        ownedPairContext, "check.owner", ownedCleanupDropWrapper);
+    auto* wrapperInvalid = llvm::BasicBlock::Create(
+        ownedPairContext, "invalid", ownedCleanupDropWrapper);
+    auto* wrapperOwned = llvm::BasicBlock::Create(
+        ownedPairContext, "drop.owner", ownedCleanupDropWrapper);
+    llvm::IRBuilder<> dropProofBuilder(wrapperEntry);
+    auto* wrapperCell = ownedCleanupDropWrapper->getArg(0);
+    auto* wrapperCellCheck = llvm::cast<llvm::ICmpInst>(
+        dropProofBuilder.CreateIsNotNull(wrapperCell));
+    dropProofBuilder.CreateCondBr(wrapperCellCheck, wrapperCheck,
+                                   wrapperInvalid);
+    dropProofBuilder.SetInsertPoint(wrapperCheck);
+    auto* wrapperOwner = dropProofBuilder.CreateLoad(ownedPairPtr, wrapperCell);
+    auto* wrapperOwnerCheck = llvm::cast<llvm::ICmpInst>(
+        dropProofBuilder.CreateIsNotNull(wrapperOwner));
+    auto* wrapperOwnerBranch = dropProofBuilder.CreateCondBr(
+        wrapperOwnerCheck, wrapperOwned, wrapperInvalid);
+    dropProofBuilder.SetInsertPoint(wrapperInvalid);
+    auto* wrapperInvalidReturn = dropProofBuilder.CreateRet(
+        llvm::ConstantInt::get(ownedPairI32, 1));
+    dropProofBuilder.SetInsertPoint(wrapperOwned);
+    auto* wrapperClear = dropProofBuilder.CreateStore(
+        llvm::ConstantPointerNull::get(ownedPairPtr), wrapperCell);
+    auto* wrapperDropCall = dropProofBuilder.CreateCall(
+        ownedCleanupDrop, {wrapperOwner});
+    auto* wrapperDeallocCall = dropProofBuilder.CreateCall(
+        ownedCleanupDealloc,
+        {wrapperOwner, llvm::ConstantInt::get(ownedPairSize, 4),
+         llvm::ConstantInt::get(ownedPairSize, 4)});
+    auto* wrapperSuccessReturn = dropProofBuilder.CreateRet(
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    const auto verifyDropWrapper = [&] {
+        return luna::codegen::verifyNativeOwnedResultDropClosedGraph(
+            ownedPairModule, ownedCleanupDropWrapper->getName().str(),
+            ownedCleanupTransfer->getName().str(), ownedCleanupFacts,
+            ownedCleanupCalls,
+            {{ownedCleanupDrop->getName().str(), 0, 0, 4, 4}},
+            rootCleanupSteps, transferStatuses, ownedSourceError);
+    };
+    if (!verifyDropWrapper())
+        return fail("Native v3 transferred Drop lost its closed graph");
+    wrapperCellCheck->setPredicate(llvm::ICmpInst::ICMP_EQ);
+    const bool acceptedNullWrapperCell = verifyDropWrapper();
+    wrapperCellCheck->setPredicate(llvm::ICmpInst::ICMP_NE);
+    wrapperOwnerBranch->setSuccessor(0, wrapperInvalid);
+    const bool acceptedBypassedWrapperCleanup = verifyDropWrapper();
+    wrapperOwnerBranch->setSuccessor(0, wrapperOwned);
+    wrapperClear->setOperand(0, wrapperOwner);
+    const bool acceptedUnclearedWrapperCell = verifyDropWrapper();
+    wrapperClear->setOperand(0,
+        llvm::ConstantPointerNull::get(ownedPairPtr));
+    wrapperDropCall->setArgOperand(0, wrapperCell);
+    const bool acceptedWrongWrapperDropOwner = verifyDropWrapper();
+    wrapperDropCall->setArgOperand(0, wrapperOwner);
+    wrapperDeallocCall->setArgOperand(1,
+        llvm::ConstantInt::get(ownedPairSize, 8));
+    const bool acceptedWrongWrapperDeallocation = verifyDropWrapper();
+    wrapperDeallocCall->setArgOperand(1,
+        llvm::ConstantInt::get(ownedPairSize, 4));
+    wrapperInvalidReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    const bool acceptedWrongWrapperInvalidStatus = verifyDropWrapper();
+    wrapperInvalidReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 1));
+    wrapperSuccessReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 1));
+    const bool acceptedWrongWrapperSuccessStatus = verifyDropWrapper();
+    wrapperSuccessReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    llvm::IRBuilder<> wrapperExtraReadBuilder(wrapperSuccessReturn);
+    auto* wrapperExtraRead = wrapperExtraReadBuilder.CreateLoad(
+        ownedPairI32, wrapperOwner);
+    const bool acceptedExtraWrapperRead = verifyDropWrapper();
+    wrapperExtraRead->eraseFromParent();
+    if (acceptedNullWrapperCell || acceptedBypassedWrapperCleanup ||
+        acceptedUnclearedWrapperCell || acceptedWrongWrapperDropOwner ||
+        acceptedWrongWrapperDeallocation ||
+        acceptedWrongWrapperInvalidStatus ||
+        acceptedWrongWrapperSuccessStatus || acceptedExtraWrapperRead ||
+        !verifyDropWrapper())
+        return fail("Native v3 transferred Drop accepted altered owner cleanup");
     auto mutableOwnedError = std::find_if(
         tryApplyModule->typeTable.begin(), tryApplyModule->typeTable.end(),
         [&](const moon::TypeRecord& type) {

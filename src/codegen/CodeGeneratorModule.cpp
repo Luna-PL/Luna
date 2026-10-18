@@ -2673,23 +2673,26 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     failure = "private Ref Result transfer lost preflight or one body call";
                     return false;
                 }
-                if (privateOwnedResultFacts &&
-                    !luna::codegen::verifyNativeOwnedResultTransferClosedGraph(
-                        *proof.mModule, transfer->getName().str(),
-                        *privateOwnedResultFacts, expectedDropCalls,
-                        cleanupNodes, cleanupSteps,
-                        {LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST,
-                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST,
-                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_RESOURCE_V1_TEST,
-                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST,
-                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_CONTEXT_V1_TEST,
-                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_HANDLE_V1_TEST,
-                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST,
-                         LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST},
-                        failure))
-                    return false;
+                const luna::codegen::NativeOwnedResultTransferStatuses
+                    transferStatuses = {
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST,
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST,
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_RESOURCE_V1_TEST,
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST,
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_CONTEXT_V1_TEST,
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_HANDLE_V1_TEST,
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST,
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST};
                 dropBuilder.SetInsertPoint(cleanupEnd);
                 dropBuilder.CreateRet(llvm::ConstantInt::get(i32Ty, 0));
+                if (privateOwnedResultFacts &&
+                    !luna::codegen::verifyNativeOwnedResultDropClosedGraph(
+                        *proof.mModule, dropEntry->getName().str(),
+                        transfer->getName().str(), *privateOwnedResultFacts,
+                        expectedDropCalls, cleanupNodes, cleanupSteps,
+                        transferStatuses,
+                        failure))
+                    return false;
                 if (privateOwnedResultFacts) {
                     // The private C host boundary owns the complete return
                     // transaction. The loader supplies a live code lease and
