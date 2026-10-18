@@ -1689,6 +1689,11 @@ failure edge drops that same local owner cell and returns status `8`. The
 private JIT path runs this check and rejects altered lease, branch, Drop,
 failure status or tag destination. Output preflight, transfer failure cleanup
 and the full host status graph still need independent production proof.
+The producer-side transfer-fork check also requires one call with the original
+parent and Ref, distinct local tag/scalar/owner scratch cells, a null-initialized
+owner cell and zero test injection. Its failure edge returns the transfer
+status directly; only success reaches the branch's success continuation.
+This does not yet prove output preflight or cleanup inside the transfer body.
 
 The private generated transfer entry now consumes those source facts for the
 candidate owned-error shape and checks its emitted C calling convention,

@@ -5239,15 +5239,48 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             {ownedPairPtr, ownedPairPtr, ownedPairPtr, ownedPairPtr}, false),
         llvm::Function::ExternalLinkage,
         "luna_runtime_owned_result_adopt_v1", ownedPairModule);
-    auto* ownedHostStart = llvm::BasicBlock::Create(
+    auto* ownedPairTransfer = llvm::Function::Create(
+        llvm::FunctionType::get(ownedPairI32,
+            {ownedPairPtr, ownedPairPtr, ownedPairPtr, ownedPairPtr,
+             ownedPairPtr, ownedPairI32}, false),
+        llvm::Function::ExternalLinkage,
+        "luna_native_owned_result_transfer", ownedPairModule);
+    ownedPairBuilder.SetInsertPoint(llvm::BasicBlock::Create(
+        ownedPairContext, "entry", ownedPairTransfer));
+    ownedPairBuilder.CreateRet(llvm::ConstantInt::get(ownedPairI32, 0));
+    auto* ownedHostPreflight = llvm::BasicBlock::Create(
         ownedPairContext, "entry", ownedPairHost);
+    auto* ownedHostTransfer = llvm::BasicBlock::Create(
+        ownedPairContext, "transfer", ownedPairHost);
+    auto* ownedHostTransferFailed = llvm::BasicBlock::Create(
+        ownedPairContext, "transfer.failed", ownedPairHost);
+    auto* ownedHostStart = llvm::BasicBlock::Create(
+        ownedPairContext, "adopt", ownedPairHost);
     auto* ownedHostCommit = llvm::BasicBlock::Create(
         ownedPairContext, "commit", ownedPairHost);
     auto* ownedHostFailed = llvm::BasicBlock::Create(
         ownedPairContext, "failed", ownedPairHost);
-    ownedPairBuilder.SetInsertPoint(ownedHostStart);
+    ownedPairBuilder.SetInsertPoint(ownedHostPreflight);
     auto* ownedHostTag = ownedPairBuilder.CreateAlloca(ownedPairI32);
+    auto* ownedHostScalar = ownedPairBuilder.CreateAlloca(ownedPairI32);
     auto* ownedHostCell = ownedPairBuilder.CreateAlloca(ownedPairPtr);
+    ownedPairBuilder.CreateBr(ownedHostTransfer);
+    ownedPairBuilder.SetInsertPoint(ownedHostTransfer);
+    auto* ownedHostInit = ownedPairBuilder.CreateStore(
+        llvm::ConstantPointerNull::get(ownedPairPtr), ownedHostCell);
+    auto* ownedTransferCall = ownedPairBuilder.CreateCall(
+        ownedPairTransfer, {ownedPairHost->getArg(0),
+            ownedPairHost->getArg(1), ownedHostTag, ownedHostScalar,
+            ownedHostCell, llvm::ConstantInt::get(ownedPairI32, 0)});
+    auto* ownedTransferCheck = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateICmpEQ(
+            ownedTransferCall, llvm::ConstantInt::get(ownedPairI32, 0)));
+    ownedPairBuilder.CreateCondBr(ownedTransferCheck,
+                                  ownedHostStart, ownedHostTransferFailed);
+    ownedPairBuilder.SetInsertPoint(ownedHostTransferFailed);
+    auto* ownedTransferFailedReturn = ownedPairBuilder.CreateRet(
+        ownedTransferCall);
+    ownedPairBuilder.SetInsertPoint(ownedHostStart);
     auto* ownedHostValue = ownedPairBuilder.CreateLoad(
         ownedPairPtr, ownedHostCell);
     auto* ownedHostTagValue = ownedPairBuilder.CreateLoad(
@@ -5297,6 +5330,36 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         acceptedWrongFailureStatus || acceptedWrongTagCell ||
         !verifyOwnedAdoption())
         return fail("Native v3 host adoption accepted altered commit or cleanup");
+    const auto verifyOwnedTransfer = [&] {
+        return luna::codegen::verifyNativeOwnedResultHostTransferFork(
+            ownedPairModule, ownedPairHost->getName().str(),
+            ownedPairTransfer->getName().str(), ownedSourceError);
+    };
+    if (!verifyOwnedTransfer())
+        return fail("Native v3 host transfer lost its local failure fork");
+    ownedTransferCall->setArgOperand(0, ownedPairHost->getArg(1));
+    const bool acceptedWrongIngress = verifyOwnedTransfer();
+    ownedTransferCall->setArgOperand(0, ownedPairHost->getArg(0));
+    ownedTransferCall->setArgOperand(5,
+        llvm::ConstantInt::get(ownedPairI32, 1));
+    const bool acceptedTransferInjection = verifyOwnedTransfer();
+    ownedTransferCall->setArgOperand(5,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    ownedHostInit->setOperand(0, ownedPairHost->getArg(4));
+    const bool acceptedUninitializedOwner = verifyOwnedTransfer();
+    ownedHostInit->setOperand(0,
+        llvm::ConstantPointerNull::get(ownedPairPtr));
+    ownedTransferCheck->setPredicate(llvm::ICmpInst::ICMP_NE);
+    const bool acceptedInvertedTransfer = verifyOwnedTransfer();
+    ownedTransferCheck->setPredicate(llvm::ICmpInst::ICMP_EQ);
+    ownedTransferFailedReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    const bool acceptedSwallowedStatus = verifyOwnedTransfer();
+    ownedTransferFailedReturn->setOperand(0, ownedTransferCall);
+    if (acceptedWrongIngress || acceptedTransferInjection ||
+        acceptedUninitializedOwner || acceptedInvertedTransfer ||
+        acceptedSwallowedStatus || !verifyOwnedTransfer())
+        return fail("Native v3 host transfer accepted altered failure fork");
     auto mutableOwnedError = std::find_if(
         tryApplyModule->typeTable.begin(), tryApplyModule->typeTable.end(),
         [&](const moon::TypeRecord& type) {

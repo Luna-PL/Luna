@@ -97,4 +97,11 @@ bool verifyNativeOwnedResultHostAdoption(
     const llvm::Module& generated, const std::string& hostLinkageName,
     const std::string& dropLinkageName, std::string& error);
 
+// Proves the host's single transfer call uses local scratch outputs and a
+// zero injection argument. A failed transfer returns its status directly;
+// only success reaches the branch's success continuation.
+bool verifyNativeOwnedResultHostTransferFork(
+    const llvm::Module& generated, const std::string& hostLinkageName,
+    const std::string& transferLinkageName, std::string& error);
+
 } // namespace luna::codegen

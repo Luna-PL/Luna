@@ -396,4 +396,106 @@ bool verifyNativeOwnedResultHostAdoption(
     return true;
 }
 
+bool verifyNativeOwnedResultHostTransferFork(
+    const llvm::Module& generated, const std::string& hostLinkageName,
+    const std::string& transferLinkageName, std::string& error) {
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    const auto* host = generated.getFunction(hostLinkageName);
+    const auto* transfer = generated.getFunction(transferLinkageName);
+    if (!host || host->isDeclaration() || host->isVarArg() ||
+        host->getCallingConv() != llvm::CallingConv::C ||
+        !host->getReturnType()->isIntegerTy(32) || host->arg_size() != 7 ||
+        !host->hasExternalLinkage() ||
+        !transfer || transfer->isDeclaration() || transfer->isVarArg() ||
+        transfer->getCallingConv() != llvm::CallingConv::C ||
+        !transfer->getReturnType()->isIntegerTy(32) ||
+        transfer->arg_size() != 6 || !transfer->hasExternalLinkage())
+        return reject("Native v3 host transfer lacks its exact C profile");
+    for (unsigned index = 0; index < 6; ++index)
+        if (!host->getArg(index)->getType()->isPointerTy() ||
+            host->getArg(index)->getType()->getPointerAddressSpace() != 0)
+            return reject("Native v3 host transfer changed a pointer parameter");
+    if (!host->getArg(6)->getType()->isIntegerTy(32))
+        return reject("Native v3 host transfer changed its injection parameter");
+    for (unsigned index = 0; index < 5; ++index)
+        if (!transfer->getArg(index)->getType()->isPointerTy() ||
+            transfer->getArg(index)->getType()->getPointerAddressSpace() != 0)
+            return reject("Native v3 host transfer changed a scratch parameter");
+    if (!transfer->getArg(5)->getType()->isIntegerTy(32))
+        return reject("Native v3 host transfer changed its injection parameter");
+    const llvm::CallInst* transferCall = nullptr;
+    for (const auto& block : *host)
+        for (const auto& instruction : block)
+            if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                    &instruction); call && call->getCalledFunction() == transfer) {
+                if (transferCall)
+                    return reject("Native v3 host transfer calls the body twice");
+                transferCall = call;
+            }
+    if (!transferCall ||
+        transferCall->getCallingConv() != llvm::CallingConv::C ||
+        transferCall->arg_size() != 6 ||
+        transferCall->getArgOperand(0) != host->getArg(0) ||
+        transferCall->getArgOperand(1) != host->getArg(1) ||
+        !llvm::isa<llvm::ConstantInt>(transferCall->getArgOperand(5)) ||
+        !llvm::cast<llvm::ConstantInt>(
+            transferCall->getArgOperand(5))->isZero())
+        return reject("Native v3 host transfer changed ingress or injection");
+    const auto* tagCell = llvm::dyn_cast<llvm::AllocaInst>(
+        transferCall->getArgOperand(2));
+    const auto* scalarCell = llvm::dyn_cast<llvm::AllocaInst>(
+        transferCall->getArgOperand(3));
+    const auto* ownerCell = llvm::dyn_cast<llvm::AllocaInst>(
+        transferCall->getArgOperand(4));
+    if (!tagCell || !scalarCell || !ownerCell ||
+        tagCell == scalarCell || tagCell == ownerCell ||
+        scalarCell == ownerCell ||
+        tagCell->getFunction() != host ||
+        scalarCell->getFunction() != host ||
+        ownerCell->getFunction() != host ||
+        !tagCell->getAllocatedType()->isIntegerTy(32) ||
+        !scalarCell->getAllocatedType()->isIntegerTy(32) ||
+        !ownerCell->getAllocatedType()->isPointerTy() ||
+        ownerCell->getAllocatedType()->getPointerAddressSpace() != 0)
+        return reject("Native v3 host transfer lost its local scratch cells");
+    const auto* block = transferCall->getParent();
+    const auto* init = block->size() == 4
+        ? llvm::dyn_cast<llvm::StoreInst>(&block->front()) : nullptr;
+    const auto* branch = llvm::dyn_cast<llvm::BranchInst>(
+        block->getTerminator());
+    const auto* check = branch && branch->isConditional()
+        ? llvm::dyn_cast<llvm::ICmpInst>(branch->getCondition()) : nullptr;
+    if (!init || !llvm::isa<llvm::ConstantPointerNull>(
+            init->getValueOperand()) ||
+        init->getPointerOperand() != ownerCell ||
+        &*std::next(block->begin()) != transferCall ||
+        &*std::next(block->begin(), 2) != check ||
+        !check || check->getPredicate() != llvm::ICmpInst::ICMP_EQ ||
+        !((check->getOperand(0) == transferCall &&
+           llvm::isa<llvm::ConstantInt>(check->getOperand(1)) &&
+           llvm::cast<llvm::ConstantInt>(check->getOperand(1))->isZero()) ||
+          (check->getOperand(1) == transferCall &&
+           llvm::isa<llvm::ConstantInt>(check->getOperand(0)) &&
+           llvm::cast<llvm::ConstantInt>(check->getOperand(0))->isZero())))
+        return reject("Native v3 host transfer lost its initialized success fork");
+    const auto* succeeded = branch->getSuccessor(0);
+    const auto* failed = branch->getSuccessor(1);
+    if (std::distance(llvm::pred_begin(succeeded),
+                      llvm::pred_end(succeeded)) != 1 ||
+        *llvm::pred_begin(succeeded) != block ||
+        std::distance(llvm::pred_begin(failed),
+                      llvm::pred_end(failed)) != 1 ||
+        *llvm::pred_begin(failed) != block || failed->size() != 1)
+        return reject("Native v3 host transfer bypasses its result fork");
+    const auto* failedReturn = llvm::dyn_cast<llvm::ReturnInst>(
+        failed->getTerminator());
+    if (!failedReturn || failedReturn->getReturnValue() != transferCall)
+        return reject("Native v3 host transfer changed its failure status");
+    error.clear();
+    return true;
+}
+
 } // namespace luna::codegen
