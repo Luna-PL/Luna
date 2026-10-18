@@ -197,4 +197,27 @@ bool verifyNativeOwnedResultTransferOutputOwnerGates(
     const llvm::Module& generated, const std::string& transferLinkageName,
     uint32_t invalidOutputStatus, std::string& error);
 
+// Composes the private transfer proofs and closes its reachable status graph.
+// Only the verified success arms write output cells; cleanup may read nested
+// resource fields but may not allocate, write, or add calls beyond the
+// source-derived cleanup sequence.
+struct NativeOwnedResultTransferStatuses {
+    uint32_t success;
+    uint32_t invalidOutput;
+    uint32_t invalidResource;
+    uint32_t injectedFailure;
+    uint32_t invalidContext;
+    uint32_t invalidHandle;
+    uint32_t invalidTarget;
+    uint32_t unexpectedCheck;
+};
+
+bool verifyNativeOwnedResultTransferClosedGraph(
+    const llvm::Module& generated, const std::string& transferLinkageName,
+    const NativeOwnedResultSourceFacts& source,
+    const std::vector<std::string>& expectedCleanupCalls,
+    uint64_t allocationSize, uint64_t allocationAlignment,
+    const NativeOwnedResultTransferStatuses& statuses,
+    std::string& error);
+
 } // namespace luna::codegen

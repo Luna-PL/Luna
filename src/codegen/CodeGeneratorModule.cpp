@@ -2633,43 +2633,18 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     return false;
                 }
                 if (privateOwnedResultFacts &&
-                    !luna::codegen::verifyNativeOwnedResultTransferInjectedCleanup(
+                    !luna::codegen::verifyNativeOwnedResultTransferClosedGraph(
                         *proof.mModule, transfer->getName().str(),
                         *privateOwnedResultFacts, expectedDropCalls,
                         typeSize(resourceType), typeAlignment(resourceType),
-                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_RESOURCE_V1_TEST,
-                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST,
-                        failure))
-                    return false;
-                if (privateOwnedResultFacts &&
-                    !luna::codegen::verifyNativeOwnedResultTransferScalarFork(
-                        *proof.mModule, transfer->getName().str(),
-                        *privateOwnedResultFacts,
-                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST,
-                        LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST,
-                        failure))
-                    return false;
-                if (privateOwnedResultFacts &&
-                    !luna::codegen::verifyNativeOwnedResultTransferResourceCommit(
-                        *proof.mModule, transfer->getName().str(),
-                        *privateOwnedResultFacts,
-                        LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST,
-                        failure))
-                    return false;
-                if (privateOwnedResultFacts &&
-                    !luna::codegen::verifyNativeOwnedResultTransferContextRefPreflight(
-                        *proof.mModule, transfer->getName().str(),
-                        *privateOwnedResultFacts,
-                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_CONTEXT_V1_TEST,
-                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_HANDLE_V1_TEST,
-                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST,
-                        LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST,
-                        failure))
-                    return false;
-                if (privateOwnedResultFacts &&
-                    !luna::codegen::verifyNativeOwnedResultTransferOutputOwnerGates(
-                        *proof.mModule, transfer->getName().str(),
-                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST,
+                        {LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST,
+                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST,
+                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_RESOURCE_V1_TEST,
+                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST,
+                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_CONTEXT_V1_TEST,
+                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_HANDLE_V1_TEST,
+                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST,
+                         LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST},
                         failure))
                     return false;
                 dropBuilder.SetInsertPoint(cleanupEnd);

@@ -1731,7 +1731,7 @@ size/alignment, rejects direct output-cell writes in the cleanup block, and
 requires status `3`. The failure block now also rejects local scratch writes,
 volatile reads and other unrecognized side effects. The null-owner status `2`
 block has only the resource gate as predecessor. Nested Drop argument
-provenance and the transfer graph as a whole remain separate proof work.
+provenance remains separate proof work.
 The descriptor's error-value layout describes its pointer carrier, which can
 differ from the heap allocation layout. A separate producer-side scalar-fork
 check now binds body tag `1` to the scalar Ok arm, requires its injection
@@ -1750,6 +1750,13 @@ before any memory access. Only then may it load the owner cell; an occupied
 cell or invalid output returns status `1` without writing outputs. The
 context check has that empty-cell edge as its sole predecessor. The full host
 graph is closed by the following check.
+The producer now composes all five transfer checks into a closed-graph check.
+It requires exactly 18 reachable blocks, one owner-cell load outside cleanup,
+four stores confined to the two success commits, the three expected preflight
+and body calls, the source-derived cleanup calls, ten returns, six branches
+and two status switches. Extra blocks, allocations, calls, memory effects and
+volatile or atomic accesses are rejected. Nested cleanup field reads remain
+allowed; their Drop argument provenance is the next proof gate.
 The producer-side host closed-graph check composes all of those branch and
 preflight verifiers. It requires exactly 18 reachable blocks, three entry
 scratch allocations, four non-volatile loads, four stores to the checked

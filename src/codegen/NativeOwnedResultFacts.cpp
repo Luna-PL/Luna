@@ -1944,4 +1944,133 @@ bool verifyNativeOwnedResultTransferOutputOwnerGates(
     return true;
 }
 
+bool verifyNativeOwnedResultTransferClosedGraph(
+    const llvm::Module& generated, const std::string& transferLinkageName,
+    const NativeOwnedResultSourceFacts& source,
+    const std::vector<std::string>& expectedCleanupCalls,
+    uint64_t allocationSize, uint64_t allocationAlignment,
+    const NativeOwnedResultTransferStatuses& statuses,
+    std::string& error) {
+    if (!verifyNativeOwnedResultTransferInjectedCleanup(
+            generated, transferLinkageName, source, expectedCleanupCalls,
+            allocationSize, allocationAlignment,
+            statuses.invalidResource, statuses.injectedFailure,
+            error) ||
+        !verifyNativeOwnedResultTransferScalarFork(
+            generated, transferLinkageName, source,
+            statuses.injectedFailure, statuses.success, error) ||
+        !verifyNativeOwnedResultTransferResourceCommit(
+            generated, transferLinkageName, source,
+            statuses.success, error) ||
+        !verifyNativeOwnedResultTransferContextRefPreflight(
+            generated, transferLinkageName, source,
+            statuses.invalidContext, statuses.invalidHandle,
+            statuses.invalidTarget, statuses.unexpectedCheck,
+            error) ||
+        !verifyNativeOwnedResultTransferOutputOwnerGates(
+            generated, transferLinkageName,
+            statuses.invalidOutput,
+            error))
+        return false;
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    const auto* transfer = generated.getFunction(transferLinkageName);
+    const auto* body = generated.getFunction(source.sourceLinkageName);
+    if (transfer->size() != 18)
+        return reject("Native v3 transfer graph changed its block count");
+    llvm::SmallPtrSet<const llvm::BasicBlock*, 32> reached;
+    std::vector<const llvm::BasicBlock*> pending = {&transfer->getEntryBlock()};
+    reached.insert(pending.front());
+    while (!pending.empty()) {
+        const auto* block = pending.back();
+        pending.pop_back();
+        for (const auto* successor : llvm::successors(block))
+            if (reached.insert(successor).second)
+                pending.push_back(successor);
+    }
+    if (reached.size() != transfer->size())
+        return reject("Native v3 transfer graph has an unreachable block");
+    const auto* ownerGate = llvm::cast<llvm::BranchInst>(
+        transfer->getEntryBlock().getTerminator())->getSuccessor(0);
+    const llvm::CallInst* bodyCall = nullptr;
+    for (const auto& block : *transfer)
+        for (const auto& instruction : block)
+            if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                    &instruction); call && call->getCalledFunction() == body)
+                bodyCall = call;
+    const auto* dispatch = llvm::cast<llvm::BranchInst>(
+        bodyCall->getParent()->getTerminator());
+    const auto* resource = llvm::cast<llvm::BranchInst>(
+        dispatch->getSuccessor(1)->getTerminator());
+    const auto* valid = llvm::cast<llvm::BranchInst>(
+        resource->getSuccessor(0)->getTerminator());
+    const auto* cleanup = valid->getSuccessor(0);
+    unsigned ownerLoads = 0;
+    unsigned tagStores = 0;
+    unsigned scalarStores = 0;
+    unsigned ownerStores = 0;
+    unsigned preflightCalls = 0;
+    unsigned bodyCalls = 0;
+    unsigned cleanupCalls = 0;
+    unsigned returns = 0;
+    unsigned branches = 0;
+    unsigned switches = 0;
+    for (const auto& block : *transfer)
+        for (const auto& instruction : block) {
+            if (llvm::isa<llvm::AllocaInst>(instruction))
+                return reject("Native v3 transfer graph added an allocation");
+            if (const auto* load = llvm::dyn_cast<llvm::LoadInst>(
+                    &instruction)) {
+                if (load->isVolatile() || load->isAtomic())
+                    return reject("Native v3 transfer graph added a volatile or atomic load");
+                if (&block == ownerGate &&
+                    load->getPointerOperand() == transfer->getArg(4))
+                    ++ownerLoads;
+                else if (&block != cleanup)
+                    return reject("Native v3 transfer graph added a read outside cleanup");
+            } else if (const auto* store = llvm::dyn_cast<llvm::StoreInst>(
+                           &instruction)) {
+                if (store->isVolatile() || store->isAtomic())
+                    return reject("Native v3 transfer graph added a volatile or atomic store");
+                const auto* destination = store->getPointerOperand();
+                if (destination == transfer->getArg(2)) ++tagStores;
+                else if (destination == transfer->getArg(3)) ++scalarStores;
+                else if (destination == transfer->getArg(4)) ++ownerStores;
+                else return reject("Native v3 transfer graph added a store");
+            } else if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                           &instruction)) {
+                const auto* callee = call->getCalledFunction();
+                if (&block == cleanup && callee &&
+                    cleanupCalls < expectedCleanupCalls.size() &&
+                    callee->getName() == expectedCleanupCalls[cleanupCalls])
+                    ++cleanupCalls;
+                else if (callee == body) ++bodyCalls;
+                else if (callee && (callee->getName() ==
+                             "luna_compiler_fragment_context_check" ||
+                         callee->getName() ==
+                             "luna_runtime_fragment_ref_check_v1"))
+                    ++preflightCalls;
+                else return reject("Native v3 transfer graph added an unrecognized call");
+            } else if (llvm::isa<llvm::ReturnInst>(instruction)) {
+                ++returns;
+            } else if (llvm::isa<llvm::BranchInst>(instruction)) {
+                ++branches;
+            } else if (llvm::isa<llvm::SwitchInst>(instruction)) {
+                ++switches;
+            } else if (instruction.mayHaveSideEffects() ||
+                       instruction.isTerminator()) {
+                return reject("Native v3 transfer graph added a side effect or exit");
+            }
+        }
+    if (ownerLoads != 1 || tagStores != 2 || scalarStores != 1 ||
+        ownerStores != 1 || preflightCalls != 2 || bodyCalls != 1 ||
+        cleanupCalls != expectedCleanupCalls.size() || returns != 10 ||
+        branches != 6 || switches != 2)
+        return reject("Native v3 transfer graph changed its effects or exits");
+    error.clear();
+    return true;
+}
+
 } // namespace luna::codegen

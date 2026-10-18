@@ -6355,6 +6355,38 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         acceptedPrematureTransferRead || acceptedTransferFailureWrite ||
         !verifyTransferOutputGates())
         return fail("Native v3 transfer accepted altered output gates");
+    const auto verifyTransferGraph = [&] {
+        return luna::codegen::verifyNativeOwnedResultTransferClosedGraph(
+            ownedPairModule, ownedCleanupTransfer->getName().str(),
+            ownedCleanupFacts, ownedCleanupCalls, 4, 4,
+            {LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST,
+             LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST,
+             LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_RESOURCE_V1_TEST,
+             LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST,
+             LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_CONTEXT_V1_TEST,
+             LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_HANDLE_V1_TEST,
+             LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST,
+             LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST},
+            ownedSourceError);
+    };
+    if (!verifyTransferGraph())
+        return fail("Native v3 transfer lost its closed status graph");
+    auto* orphanTransferBlock = llvm::BasicBlock::Create(
+        ownedPairContext, "orphan", ownedCleanupTransfer);
+    llvm::IRBuilder<> orphanTransferBuilder(orphanTransferBlock);
+    orphanTransferBuilder.CreateRet(llvm::ConstantInt::get(ownedPairI32, 0));
+    const bool acceptedOrphanTransferBlock = verifyTransferGraph();
+    orphanTransferBlock->eraseFromParent();
+    llvm::IRBuilder<> transferAllocaBuilder(transferEntryBranch);
+    auto* extraTransferAlloca = transferAllocaBuilder.CreateAlloca(ownedPairI32);
+    const bool acceptedTransferAlloca = verifyTransferGraph();
+    extraTransferAlloca->eraseFromParent();
+    transferOwnerLoad->setVolatile(true);
+    const bool acceptedVolatileTransferOwner = verifyTransferGraph();
+    transferOwnerLoad->setVolatile(false);
+    if (acceptedOrphanTransferBlock || acceptedTransferAlloca ||
+        acceptedVolatileTransferOwner || !verifyTransferGraph())
+        return fail("Native v3 transfer accepted an open status graph");
     auto mutableOwnedError = std::find_if(
         tryApplyModule->typeTable.begin(), tryApplyModule->typeTable.end(),
         [&](const moon::TypeRecord& type) {
