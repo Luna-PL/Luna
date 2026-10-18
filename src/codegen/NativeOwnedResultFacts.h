@@ -142,4 +142,12 @@ bool verifyNativeOwnedResultTransferInjectedCleanup(
     uint32_t invalidResourceStatus, uint32_t injectedFailureStatus,
     std::string& error);
 
+// Checks the owned-error transfer's scalar Ok arm from body tag dispatch
+// through injection failure or a success commit that writes tag and scalar.
+bool verifyNativeOwnedResultTransferScalarFork(
+    const llvm::Module& generated, const std::string& transferLinkageName,
+    const NativeOwnedResultSourceFacts& source,
+    uint32_t injectedFailureStatus, uint32_t successStatus,
+    std::string& error);
+
 } // namespace luna::codegen

@@ -5611,6 +5611,12 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "luna_native_owned_cleanup_transfer", ownedPairModule);
     auto* ownedCleanupStart = llvm::BasicBlock::Create(
         ownedPairContext, "entry", ownedCleanupTransfer);
+    auto* ownedCleanupScalar = llvm::BasicBlock::Create(
+        ownedPairContext, "scalar", ownedCleanupTransfer);
+    auto* ownedCleanupScalarFailure = llvm::BasicBlock::Create(
+        ownedPairContext, "scalar.injected.failure", ownedCleanupTransfer);
+    auto* ownedCleanupScalarCommit = llvm::BasicBlock::Create(
+        ownedPairContext, "scalar.commit", ownedCleanupTransfer);
     auto* ownedCleanupResource = llvm::BasicBlock::Create(
         ownedPairContext, "resource", ownedCleanupTransfer);
     auto* ownedCleanupValid = llvm::BasicBlock::Create(
@@ -5625,7 +5631,31 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto* ownedCleanupBodyCall = ownedPairBuilder.CreateCall(
         ownedCleanupBody, {ownedCleanupTransfer->getArg(0),
                            ownedCleanupTransfer->getArg(1)});
-    ownedPairBuilder.CreateBr(ownedCleanupResource);
+    auto* ownedCleanupTag = ownedPairBuilder.CreateExtractValue(
+        ownedCleanupBodyCall, {0});
+    auto* ownedCleanupDispatch = ownedPairBuilder.CreateCondBr(
+        ownedCleanupTag, ownedCleanupScalar, ownedCleanupResource);
+    ownedPairBuilder.SetInsertPoint(ownedCleanupScalar);
+    auto* ownedCleanupScalarInjection = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateICmpNE(ownedCleanupTransfer->getArg(5),
+            llvm::ConstantInt::get(ownedPairI32, 0)));
+    ownedPairBuilder.CreateCondBr(ownedCleanupScalarInjection,
+        ownedCleanupScalarFailure, ownedCleanupScalarCommit);
+    ownedPairBuilder.SetInsertPoint(ownedCleanupScalarFailure);
+    auto* ownedCleanupScalarFailureReturn = ownedPairBuilder.CreateRet(
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST));
+    ownedPairBuilder.SetInsertPoint(ownedCleanupScalarCommit);
+    auto* ownedCleanupScalarTagStore = ownedPairBuilder.CreateStore(
+        llvm::ConstantInt::get(ownedPairI32, 1),
+        ownedCleanupTransfer->getArg(2));
+    auto* ownedCleanupScalarPayload = ownedPairBuilder.CreateIntCast(
+        ownedPairBuilder.CreateExtractValue(ownedCleanupBodyCall, {1, 0}),
+        ownedPairI32, true);
+    auto* ownedCleanupScalarStore = ownedPairBuilder.CreateStore(
+        ownedCleanupScalarPayload, ownedCleanupTransfer->getArg(3));
+    auto* ownedCleanupScalarCommitReturn = ownedPairBuilder.CreateRet(
+        llvm::ConstantInt::get(ownedPairI32, 0));
     ownedPairBuilder.SetInsertPoint(ownedCleanupResource);
     auto* ownedCleanupOwner = ownedPairBuilder.CreateIntToPtr(
         ownedPairBuilder.CreateExtractValue(ownedCleanupBodyCall, {1, 0}),
@@ -5717,6 +5747,62 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         acceptedInvertedCleanupGate || acceptedWrongCleanupStatus ||
         acceptedEarlyOutputWrite || !verifyOwnedCleanup())
         return fail("Native v3 transfer accepted altered injected cleanup");
+    const auto verifyScalarFork = [&] {
+        return luna::codegen::verifyNativeOwnedResultTransferScalarFork(
+            ownedPairModule, ownedCleanupTransfer->getName().str(),
+            ownedCleanupFacts,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST,
+            ownedSourceError);
+    };
+    if (!verifyScalarFork())
+        return fail("Native v3 transfer lost scalar fork");
+    ownedCleanupDispatch->swapSuccessors();
+    const bool acceptedWrongScalarDispatch = verifyScalarFork();
+    ownedCleanupDispatch->swapSuccessors();
+    ownedCleanupScalarInjection->setPredicate(llvm::ICmpInst::ICMP_EQ);
+    const bool acceptedInvertedScalarInjection = verifyScalarFork();
+    ownedCleanupScalarInjection->setPredicate(llvm::ICmpInst::ICMP_NE);
+    ownedCleanupScalarFailureReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    const bool acceptedWrongScalarFailure = verifyScalarFork();
+    ownedCleanupScalarFailureReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32,
+            LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST));
+    ownedCleanupScalarTagStore->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    const bool acceptedWrongScalarTag = verifyScalarFork();
+    ownedCleanupScalarTagStore->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 1));
+    auto* ownedCleanupScalarCast = llvm::cast<llvm::CastInst>(
+        ownedCleanupScalarPayload);
+    auto* ownedCleanupScalarSource = ownedCleanupScalarCast->getOperand(0);
+    ownedCleanupScalarCast->setOperand(0,
+        llvm::ConstantInt::get(ownedPairSize, 42));
+    const bool acceptedUnrelatedScalarPayload = verifyScalarFork();
+    ownedCleanupScalarCast->setOperand(0, ownedCleanupScalarSource);
+    ownedCleanupScalarStore->setOperand(1,
+        ownedCleanupTransfer->getArg(4));
+    const bool acceptedScalarOwnerWrite = verifyScalarFork();
+    ownedCleanupScalarStore->setOperand(1,
+        ownedCleanupTransfer->getArg(3));
+    ownedCleanupScalarCommitReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 3));
+    const bool acceptedWrongScalarSuccess = verifyScalarFork();
+    ownedCleanupScalarCommitReturn->setOperand(0,
+        llvm::ConstantInt::get(ownedPairI32, 0));
+    llvm::IRBuilder<> scalarEarlyWriteBuilder(ownedCleanupScalarFailureReturn);
+    auto* scalarEarlyWrite = scalarEarlyWriteBuilder.CreateStore(
+        llvm::ConstantInt::get(ownedPairI32, 1),
+        ownedCleanupTransfer->getArg(2));
+    const bool acceptedScalarFailureWrite = verifyScalarFork();
+    scalarEarlyWrite->eraseFromParent();
+    if (acceptedWrongScalarDispatch || acceptedInvertedScalarInjection ||
+        acceptedWrongScalarFailure || acceptedWrongScalarTag ||
+        acceptedUnrelatedScalarPayload || acceptedScalarOwnerWrite ||
+        acceptedWrongScalarSuccess || acceptedScalarFailureWrite ||
+        !verifyScalarFork())
+        return fail("Native v3 transfer accepted altered scalar fork");
     auto mutableOwnedError = std::find_if(
         tryApplyModule->typeTable.begin(), tryApplyModule->typeTable.end(),
         [&](const moon::TypeRecord& type) {

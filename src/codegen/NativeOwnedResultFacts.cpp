@@ -1044,4 +1044,137 @@ bool verifyNativeOwnedResultTransferInjectedCleanup(
     return true;
 }
 
+bool verifyNativeOwnedResultTransferScalarFork(
+    const llvm::Module& generated, const std::string& transferLinkageName,
+    const NativeOwnedResultSourceFacts& source,
+    uint32_t injectedFailureStatus, uint32_t successStatus,
+    std::string& error) {
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    const auto* transfer = generated.getFunction(transferLinkageName);
+    const auto* body = generated.getFunction(source.sourceLinkageName);
+    if (!transfer || transfer->isDeclaration() || transfer->isVarArg() ||
+        transfer->getCallingConv() != llvm::CallingConv::C ||
+        !transfer->getReturnType()->isIntegerTy(32) ||
+        transfer->arg_size() != 6 || !transfer->hasExternalLinkage() ||
+        !body || body->isDeclaration() || !body->hasInternalLinkage() ||
+        !transfer->getArg(5)->getType()->isIntegerTy(32))
+        return reject("Native v3 scalar transfer lacks its source profile");
+    for (unsigned index = 0; index < 5; ++index)
+        if (!transfer->getArg(index)->getType()->isPointerTy() ||
+            transfer->getArg(index)->getType()->getPointerAddressSpace() != 0)
+            return reject(
+                "Native v3 scalar transfer changed a pointer parameter");
+    const llvm::CallInst* bodyCall = nullptr;
+    for (const auto& block : *transfer)
+        for (const auto& instruction : block)
+            if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                    &instruction); call && call->getCalledFunction() == body) {
+                if (bodyCall)
+                    return reject("Native v3 scalar transfer calls the body twice");
+                bodyCall = call;
+            }
+    if (!bodyCall)
+        return reject("Native v3 scalar transfer lost its body call");
+    const auto* dispatch = bodyCall->getParent();
+    const auto* resultBranch = llvm::dyn_cast<llvm::BranchInst>(
+        dispatch->getTerminator());
+    const auto* tag = resultBranch && resultBranch->isConditional()
+        ? llvm::dyn_cast<llvm::ExtractValueInst>(
+            resultBranch->getCondition()) : nullptr;
+    if (!resultBranch || !resultBranch->isConditional() ||
+        dispatch->size() != 3 || !tag || tag->getNumIndices() != 1 ||
+        tag->getIndices()[0] != 0 ||
+        tag->getAggregateOperand() != bodyCall ||
+        !tag->getType()->isIntegerTy(1))
+        return reject("Native v3 scalar transfer lost its body tag fork");
+    const auto* scalar = resultBranch->getSuccessor(0);
+    if (scalar == resultBranch->getSuccessor(1) ||
+        std::distance(llvm::pred_begin(scalar),
+                      llvm::pred_end(scalar)) != 1 ||
+        *llvm::pred_begin(scalar) != dispatch)
+        return reject("Native v3 scalar transfer bypasses body tag dispatch");
+    if (scalar->size() != 2) {
+        error = "Native v3 scalar transfer has " +
+            std::to_string(scalar->size()) + " gate instructions";
+        for (const auto& instruction : *scalar)
+            error += " " + std::string(instruction.getOpcodeName());
+        return false;
+    }
+    const auto* injected = llvm::dyn_cast<llvm::ICmpInst>(&scalar->front());
+    const auto* injectionBranch = llvm::dyn_cast<llvm::BranchInst>(
+        scalar->getTerminator());
+    if (!injected || injected->getPredicate() != llvm::ICmpInst::ICMP_NE ||
+        !((injected->getOperand(0) == transfer->getArg(5) &&
+           llvm::isa<llvm::ConstantInt>(injected->getOperand(1)) &&
+           llvm::cast<llvm::ConstantInt>(
+               injected->getOperand(1))->isZero()) ||
+          (injected->getOperand(1) == transfer->getArg(5) &&
+           llvm::isa<llvm::ConstantInt>(injected->getOperand(0)) &&
+           llvm::cast<llvm::ConstantInt>(
+               injected->getOperand(0))->isZero())) ||
+        !injectionBranch || !injectionBranch->isConditional() ||
+        injectionBranch->getCondition() != injected)
+        return reject("Native v3 scalar transfer lost its injection gate");
+    const auto* failed = injectionBranch->getSuccessor(0);
+    const auto* commit = injectionBranch->getSuccessor(1);
+    const auto returnsStatus = [](const llvm::BasicBlock* block,
+                                  uint32_t status) {
+        const auto* returned = llvm::dyn_cast<llvm::ReturnInst>(
+            block->getTerminator());
+        const auto* value = returned
+            ? llvm::dyn_cast_or_null<llvm::ConstantInt>(
+                returned->getReturnValue()) : nullptr;
+        return value && value->getBitWidth() == 32 &&
+            value->getZExtValue() == status;
+    };
+    if (failed == commit ||
+        std::distance(llvm::pred_begin(failed),
+                      llvm::pred_end(failed)) != 1 ||
+        *llvm::pred_begin(failed) != scalar || failed->size() != 1 ||
+        !returnsStatus(failed, injectedFailureStatus))
+        return reject("Native v3 scalar transfer changed injected failure");
+    if (std::distance(llvm::pred_begin(commit),
+                      llvm::pred_end(commit)) != 1 ||
+        *llvm::pred_begin(commit) != scalar ||
+        !returnsStatus(commit, successStatus))
+        return reject("Native v3 scalar transfer bypasses success commit");
+    std::vector<const llvm::StoreInst*> stores;
+    for (const auto& instruction : *commit) {
+        if (const auto* store = llvm::dyn_cast<llvm::StoreInst>(
+                &instruction))
+            stores.push_back(store);
+        else if (!llvm::isa<llvm::ExtractValueInst>(instruction) &&
+                 !llvm::isa<llvm::CastInst>(instruction) &&
+                 !llvm::isa<llvm::ReturnInst>(instruction))
+            return reject("Native v3 scalar transfer added a commit effect");
+    }
+    if (stores.size() != 2 ||
+        stores[0]->getPointerOperand() != transfer->getArg(2) ||
+        stores[1]->getPointerOperand() != transfer->getArg(3))
+        return reject("Native v3 scalar transfer changed output cells");
+    const auto* scalarTag = llvm::dyn_cast<llvm::ConstantInt>(
+        stores[0]->getValueOperand());
+    if (!scalarTag || scalarTag->getBitWidth() != 32 ||
+        scalarTag->getZExtValue() != 1)
+        return reject("Native v3 scalar transfer changed the Ok tag");
+    const llvm::Value* scalarValue = stores[1]->getValueOperand();
+    if (const auto* cast = llvm::dyn_cast<llvm::CastInst>(scalarValue)) {
+        if (cast->getOpcode() != llvm::Instruction::Trunc &&
+            cast->getOpcode() != llvm::Instruction::SExt)
+            return reject("Native v3 scalar transfer changed signed payload cast");
+        scalarValue = cast->getOperand(0);
+    }
+    const auto* payload = llvm::dyn_cast<llvm::ExtractValueInst>(scalarValue);
+    if (!stores[1]->getValueOperand()->getType()->isIntegerTy(32) ||
+        !payload || payload->getNumIndices() != 2 ||
+        payload->getIndices()[0] != 1 || payload->getIndices()[1] != 0 ||
+        payload->getAggregateOperand() != bodyCall)
+        return reject("Native v3 scalar transfer lost the body payload");
+    error.clear();
+    return true;
+}
+
 } // namespace luna::codegen

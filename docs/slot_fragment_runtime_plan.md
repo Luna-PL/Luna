@@ -1714,7 +1714,11 @@ binds root Drop and `rt_dealloc` to that owner and the physical allocation
 size/alignment, rejects direct output-cell writes in the cleanup block, and
 requires status `3`.
 The descriptor's error-value layout describes its pointer carrier, which can
-differ from the heap allocation layout. Other transfer failures and the full
+differ from the heap allocation layout. A separate producer-side scalar-fork
+check now binds body tag `1` to the scalar Ok arm, requires its injection
+failure to return status `3` without output writes, and requires success to
+write tag `1` and the scalar extracted from that body result before status
+`0`. Transfer preflight failures, the resource success commit and the full
 host status graph remain separate proof work.
 
 The private generated transfer entry now consumes those source facts for the
