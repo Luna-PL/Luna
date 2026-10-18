@@ -1714,7 +1714,10 @@ the caller's sole Ref handle before `resume`. The callback still sees a live
 generation through the typed call's temporary pin; both calls succeed, and
 the generation lease expires after return. The owned Err is returned after
 the callback, then dropped exactly once while the generation lease is already
-expired. The earlier pre-dispatch Err cleanup proof remains separate.
+expired. The owned Err injection-failure path also releases a caller Ref shell
+in the callback, leaves tag, scalar and owner outputs unchanged, and drops the
+uncommitted resource once; the original handle remains live for later calls.
+The earlier pre-dispatch Err cleanup proof remains separate.
 Runtime now also has an internal C adoption entry that takes a returned owner,
 generated Drop pointer, Runtime-issued live code-lease token and stable empty
 owner cell. The token is resolved in Runtime's live table without dereferencing

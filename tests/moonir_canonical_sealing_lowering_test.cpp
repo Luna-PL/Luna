@@ -804,8 +804,11 @@ bool exercisePrivateRefApplyJit(
                     }
                     return true;
                 }
-                if (loadedResult->call(parent.opaque(), handle.opaque(),
-                        &tag, &scalar, returnedOwner, true) !=
+                const auto adoptionFailureStatus = expectedDispatches
+                    ? callTypedWithCallbackRelease(true)
+                    : loadedResult->call(parent.opaque(), handle.opaque(),
+                          &tag, &scalar, returnedOwner, true);
+                if (adoptionFailureStatus !=
                         LUNA_PRIVATE_REF_RESULT_TRANSFER_ADOPTION_FAILURE_V1_TEST ||
                     tag != 42 || scalar != unchangedScalar || returnedOwner ||
                     returnedOwner.cell() != nullptr ||
