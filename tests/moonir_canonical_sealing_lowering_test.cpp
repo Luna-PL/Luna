@@ -1252,12 +1252,14 @@ bool exercisePrivateRefApplyJit(
     }
     if (!invoke()) return false;
     const bool probeTypedResultRelease =
-        exerciseLoadedResult && expectedResult && expectedResult->first &&
+        exerciseLoadedResult && expectedResult &&
         expectedDispatches != 0 && !needsSecondHandle;
     if (probeTypedResultRelease) {
         uint32_t releasedTag = 42;
         int32_t releasedScalar = 0x12345678;
         luna::runtime::RuntimeOwnedResultHandle releasedOwner;
+        const bool expectReleasedOwner = !expectedResult->first;
+        const auto dropsBeforeRelease = privateRefJitAllDropProbeCalls;
         privateRefJitCallerHandleReleased = false;
         privateRefJitLeaseLiveAfterCallerRelease = false;
         privateRefJitCallerHandleToRelease = &handle;
@@ -1270,9 +1272,25 @@ bool exercisePrivateRefApplyJit(
                 LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST ||
             !privateRefJitCallerHandleReleased ||
             !privateRefJitLeaseLiveAfterCallerRelease || handle ||
-            !generationLease.expired() || releasedTag != 1 ||
-            releasedScalar != expectedResult->second || releasedOwner) {
+            !generationLease.expired() ||
+            releasedTag != static_cast<uint32_t>(expectedResult->first) ||
+            releasedScalar != (expectedResult->first
+                ? expectedResult->second : 0x12345678) ||
+            static_cast<bool>(releasedOwner) != expectReleasedOwner ||
+            privateRefJitAllDropProbeCalls !=
+                dropsBeforeRelease + bodyDropCalls) {
             error = "private typed Result call lost its Ref pin during callback release";
+            return false;
+        }
+        if (!expectedResult->first &&
+            (releasedOwner.dropOnce() !=
+                 LUNA_RUNTIME_OWNED_RESULT_DROP_SUCCESS_V1 ||
+             releasedOwner.dropOnce() !=
+                 LUNA_RUNTIME_OWNED_RESULT_DROP_EMPTY_V1 ||
+             privateRefJitAllDropProbeCalls !=
+                 dropsBeforeRelease + bodyDropCalls +
+                     *transferredDropCalls)) {
+            error = "private typed Result owner was not dropped once after callback release";
             return false;
         }
     }
@@ -1338,8 +1356,10 @@ bool exercisePrivateRefApplyJit(
             return false;
         }
     }
-    const unsigned expectedCalls =
-        (exerciseIngressGate ? 5u : 2u) +
+    const unsigned callsBeforeReleaseProbe = exerciseIngressGate ? 5u :
+        exerciseLoadedResult && expectedResult && !expectedResult->first
+            ? 4u : 2u;
+    const unsigned expectedCalls = callsBeforeReleaseProbe +
         (probeTypedResultRelease ? 1u : 0u);
     if (privateRefJitExecutions != before + expectedDispatches * expectedCalls ||
         privateRefJitCompletedResumes !=
@@ -4435,6 +4455,20 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "  }\n"
         "  return Ok(0);\n"
         "}\n"
+        "runtime fn try_apply_dispatched_resource_return("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, ReturnedResource> {\n"
+        "  let resource = new ReturnedResource(59);\n"
+        "  let input = Err::<i32, ReturnedResource>(move resource);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      checkpoint(1) {}\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
         "runtime fn try_apply_from_resource_return("
             "selected: RuntimeFragmentRef<checkpoint>) "
             "-> Result<i32, ReturnedResource> {\n"
@@ -4613,6 +4647,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* tryApplyEarlyContinueFrom = nullptr;
     moon::FunctionDecl* tryApplyEarlyContinueFromElse = nullptr;
     moon::FunctionDecl* tryApplyResourceReturn = nullptr;
+    moon::FunctionDecl* tryApplyDispatchedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyFromResourceReturn = nullptr;
     moon::FunctionDecl* tryApplySplitOwnedFrom = nullptr;
     moon::FunctionDecl* tryApplySplitOwnedFromElse = nullptr;
@@ -4655,6 +4690,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 tryApplyEarlyContinueFromElse = function;
             if (function->name == "try_apply_resource_return")
                 tryApplyResourceReturn = function;
+            if (function->name == "try_apply_dispatched_resource_return")
+                tryApplyDispatchedResourceReturn = function;
             if (function->name == "try_apply_from_resource_return")
                 tryApplyFromResourceReturn = function;
             if (function->name == "try_apply_split_owned_from")
@@ -4684,7 +4721,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !tryApplySplitFrom || !tryApplySplitFromElse ||
         !tryApplyMergeFrom || !tryApplyMergeFromElse ||
         !tryApplyEarlyContinueFrom || !tryApplyEarlyContinueFromElse ||
-        !tryApplyResourceReturn || !tryApplyFromResourceReturn ||
+        !tryApplyResourceReturn || !tryApplyDispatchedResourceReturn ||
+        !tryApplyFromResourceReturn ||
         !tryApplySplitOwnedFrom || !tryApplySplitOwnedFromElse ||
         !tryApplyOkResourceReturn ||
         !tryApplyPairResourceReturn || !tryApplyOkResourceScalarErr ||
@@ -5204,6 +5242,26 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     if (privateRefJitReturnedDropProbeCalls != loadedReturnedDropBefore + 4 ||
         !privateRefJitDropProbeValid)
         return fail("Ref apply loaded Result lost failed-adoption or deferred Drop");
+    if (!tryApplyDispatchedResourceReturn->controlFlow ||
+        tryApplyDispatchedResourceReturn->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(
+            *tryApplyDispatchedResourceReturn->controlFlow, *tryApplyModule))
+        return fail("dispatched resource Err return did not verify");
+    const auto dispatchedReturnedDropBefore =
+        privateRefJitReturnedDropProbeCalls;
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyDispatchedResourceReturn,
+            privateRefJitError, 1, false, 1, false, false,
+            {1}, {}, std::pair<bool, int32_t>{false, 59}, 1,
+            false, false, false, nullptr, 0, true)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("dispatched resource Err lost its typed callback release");
+    }
+    if (privateRefJitReturnedDropProbeCalls !=
+            dispatchedReturnedDropBefore + 5 ||
+        !privateRefJitDropProbeValid)
+        return fail("dispatched resource Err owner was not dropped once per call");
     if (!tryApplyFromResourceReturn->controlFlow ||
         tryApplyFromResourceReturn->controlFlow->runtimeRefApplies.size() != 2 ||
         !refApplyCfgVerifier.verify(*tryApplyFromResourceReturn->controlFlow,

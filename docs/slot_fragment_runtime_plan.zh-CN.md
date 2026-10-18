@@ -1279,10 +1279,10 @@ handle。资源 Err、标量 Ok、伪造源码身份、错误 Ref 目标、已�
 保留这些 pin。canonical JIT 回归覆盖空 context／handle、错误目标、无效输出的
 优先顺序、标量成功及拥有型 Err 交接。裸指针测试入口仍供直接探测生成 wrapper；
 这两种入口都不发布 v3 descriptor 或公开 carrier ABI。
-进入分派的标量分支现让 Fragment 回调在 `resume` 前释放调用方唯一的 Ref handle。
-回调仍可观察到类型化调用临时 pin 固定的 generation；调用成功，返回后 generation
-lease 失效。拥有型 Err 清理仍是另一条分派前返回证明，因此这里尚未证明回调释放
-handle 后的拥有型返回。
+进入分派的标量和拥有型 Err 分支现让 Fragment 回调在 `resume` 前释放调用方唯一的
+Ref handle。回调仍可观察到类型化调用临时 pin 固定的 generation；两次调用均成功，
+返回后 generation lease 失效。拥有型 Err 在回调后返回，并在 generation lease 已
+失效时恰好执行一次 Drop。原有分派前 Err 清理证明仍单独保留。
 Runtime 现还提供内部 C 收养入口，接收返回 owner、生成的 Drop 指针、Runtime
 发放的有效代码 lease token，以及稳定且为空的 owner cell。入口通过 Runtime
 存活表解析 token，无须读取宿主 C++ 对象；发布唯一 owner token 前校验这些输入。
