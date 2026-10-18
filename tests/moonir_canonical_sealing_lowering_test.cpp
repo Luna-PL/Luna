@@ -5997,8 +5997,11 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto* ownedCleanupDrop = llvm::Function::Create(
         llvm::FunctionType::get(llvm::Type::getVoidTy(ownedPairContext),
             {ownedPairPtr}, false),
-        llvm::Function::ExternalLinkage,
+        llvm::Function::InternalLinkage,
         "luna_native_owned_cleanup_drop", ownedPairModule);
+    ownedPairBuilder.SetInsertPoint(llvm::BasicBlock::Create(
+        ownedPairContext, "entry", ownedCleanupDrop));
+    ownedPairBuilder.CreateRetVoid();
     auto* ownedCleanupDealloc = llvm::Function::Create(
         llvm::FunctionType::get(llvm::Type::getVoidTy(ownedPairContext),
             {ownedPairPtr, ownedPairSize, ownedPairSize}, false),
@@ -6378,6 +6381,22 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     };
     if (!verifyTransferGraph())
         return fail("Native v3 transfer lost its closed status graph");
+    ownedCleanupDrop->setLinkage(llvm::Function::ExternalLinkage);
+    const bool acceptedExternalSourceDrop = verifyTransferGraph();
+    ownedCleanupDrop->setLinkage(llvm::Function::InternalLinkage);
+    ownedCleanupDrop->deleteBody();
+    const bool acceptedMissingSourceDrop = verifyTransferGraph();
+    ownedPairBuilder.SetInsertPoint(llvm::BasicBlock::Create(
+        ownedPairContext, "entry", ownedCleanupDrop));
+    ownedPairBuilder.CreateRetVoid();
+    ownedCleanupDrop->setLinkage(llvm::Function::InternalLinkage);
+    ownedCleanupDrop->setCallingConv(llvm::CallingConv::Fast);
+    const bool acceptedWrongSourceDropConvention = verifyTransferGraph();
+    ownedCleanupDrop->setCallingConv(llvm::CallingConv::C);
+    const bool restoredSourceDrop = verifyTransferGraph();
+    if (acceptedExternalSourceDrop || acceptedMissingSourceDrop ||
+        acceptedWrongSourceDropConvention || !restoredSourceDrop)
+        return fail("Native v3 transfer accepted an unbound source Drop body");
     auto* orphanTransferBlock = llvm::BasicBlock::Create(
         ownedPairContext, "orphan", ownedCleanupTransfer);
     llvm::IRBuilder<> orphanTransferBuilder(orphanTransferBlock);
@@ -6397,8 +6416,11 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto* nestedCleanupDrop = llvm::Function::Create(
         llvm::FunctionType::get(llvm::Type::getVoidTy(ownedPairContext),
             {ownedPairPtr}, false),
-        llvm::Function::ExternalLinkage,
+        llvm::Function::InternalLinkage,
         "luna_native_nested_cleanup_drop", ownedPairModule);
+    ownedPairBuilder.SetInsertPoint(llvm::BasicBlock::Create(
+        ownedPairContext, "entry", nestedCleanupDrop));
+    ownedPairBuilder.CreateRetVoid();
     llvm::IRBuilder<> nestedCleanupBuilder(ownedCleanupDeallocCall);
     auto* rootMarkerLoad = nestedCleanupBuilder.CreateLoad(
         ownedPairI32, ownedCleanupOwner);
@@ -6454,6 +6476,11 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     };
     if (!verifyNestedCleanup() || !verifyNestedTransferGraph())
         return fail("Native v3 transfer lost nested cleanup provenance");
+    nestedCleanupDrop->setLinkage(llvm::Function::ExternalLinkage);
+    const bool acceptedExternalNestedDrop = verifyNestedCleanup();
+    nestedCleanupDrop->setLinkage(llvm::Function::InternalLinkage);
+    if (acceptedExternalNestedDrop || !verifyNestedCleanup())
+        return fail("Native v3 transfer accepted an unbound nested Drop body");
     nestedDropCall->setArgOperand(0, ownedCleanupOwner);
     const bool acceptedParentAsNestedDrop = verifyNestedCleanup();
     nestedDropCall->setArgOperand(0, nestedOwnerLoad);

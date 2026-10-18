@@ -1462,6 +1462,14 @@ bool verifyNativeOwnedResultTransferCleanupProvenance(
             node.allocationAlignment > 4096 ||
             (node.allocationAlignment & (node.allocationAlignment - 1)) != 0)
             return reject("Native v3 transfer cleanup changed an owner layout");
+        const auto* drop = generated.getFunction(node.dropLinkageName);
+        if (!drop || drop->isDeclaration() || !drop->hasInternalLinkage() ||
+            drop->isVarArg() ||
+            drop->getCallingConv() != llvm::CallingConv::C ||
+            !drop->getReturnType()->isVoidTy() || drop->arg_size() != 1 ||
+            !drop->getArg(0)->getType()->isPointerTy() ||
+            drop->getArg(0)->getType()->getPointerAddressSpace() != 0)
+            return reject("Native v3 transfer cleanup has no generated source Drop body");
         if (index == 0) continue;
         if (node.parentIndex >= index ||
             cleanupNodes[node.parentIndex].allocationSize < sizeof(void*) ||

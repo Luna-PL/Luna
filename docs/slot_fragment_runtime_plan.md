@@ -1767,8 +1767,11 @@ generated transferred-Drop wrapper now has a producer-side four-block
 closed-graph check. It requires a non-null caller cell and owner, clears the
 cell before cleanup, returns status `1` on either invalid input and `0` after
 cleanup, and matches each cleanup instruction and owner operand to the
-verified transfer failure block. Source Drop behavior and any artifact proof
-claim remain separate.
+verified transfer failure block. Each recursive Drop call must resolve to a
+defined internal source body in the same generated module with the exact
+`void(ptr)` C profile; a declaration, external body or changed calling
+convention fails the producer check. The contents of those source Drop bodies
+and any artifact proof claim remain separate.
 The producer-side host closed-graph check composes all of those branch and
 preflight verifiers. It requires exactly 18 reachable blocks, three entry
 scratch allocations, four non-volatile loads, four stores to the checked
@@ -2558,8 +2561,11 @@ not a public ABI decision or stable-release approval:
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches
    do not Drop. Up to three structs in one ownership chain now have recursive
-   cleanup and ordered Drop/deallocation proof. A bounded three-node fork with
-   two independently owned fields now has ordered `?` Err and injected-failure
+   cleanup and ordered Drop/deallocation proof. The cleanup verifier also
+   binds every recursive Drop call to a defined internal generated source
+   body with the exact C profile; it does not prove that body's effects. A
+   bounded three-node fork with two independently owned fields now has ordered
+   `?` Err and injected-failure
    cleanup evidence on both local platforms, including focused ASAN runs.
    Larger or wider owned-field graphs remain outside the proof. A test-only
    host-transfer entry now proves three disjoint output cells, the empty
