@@ -2,6 +2,7 @@
 
 #include "core/TypeLayout.h"
 #include "core/TypeRelations.h"
+#include "driver/NativeTypedDescriptor.h"
 #include "moonir/FragmentContextEffects.h"
 #include "moonir/MoonIRModule.h"
 #include "moonir/Verifier.h"
@@ -15,12 +16,11 @@ namespace luna::codegen {
 namespace {
 
 bool boundedIdentity(const std::string& value) {
-    if (value.empty() || value.size() > 4096)
-        return false;
-    for (char ch : value)
-        if (ch == '\r' || ch == '\n' || ch == '\t')
-            return false;
-    return true;
+    return !value.empty() && value.size() < 4096 &&
+        std::none_of(value.begin(), value.end(), [](char byte) {
+            return byte == '\0' || byte == '\r' ||
+                   byte == '\n' || byte == '\t';
+        }) && luna::driver::validNativeDescriptorUtf8(value);
 }
 
 } // namespace
@@ -174,6 +174,47 @@ bool deriveNativeOwnedResultSourceFacts(
     if (!std::all_of(identities.begin(), identities.end(), boundedIdentity))
         return reject("Native v3 source candidate has an invalid identity");
     facts = std::move(candidate);
+    error.clear();
+    return true;
+}
+
+std::array<std::string, 10>
+NativeOwnedResultDescriptorV3Candidate::descriptorIdentities() const {
+    return {source.functionSymbolId, source.functionContractId,
+            wrapperLinkageName, source.refSlotSymbolId,
+            source.refSlotContractId, source.resultTypeId,
+            source.errorTypeId, source.errorAbiLayoutId,
+            source.errorDropSymbolId, source.errorDropContractId};
+}
+
+std::string NativeOwnedResultDescriptorV3Candidate::canonicalRow() const {
+    return luna::driver::canonicalNativeOwnedResultExportV3(
+        LUNA_NATIVE_DECLARATION_FUNCTION_V1,
+        LUNA_NATIVE_EXPORT_CALLABLE_V1,
+        LUNA_NATIVE_ENTRY_ABI_REF_RESULT_OWNER_V1,
+        LUNA_NATIVE_REF_SHARED_BORROW_V1,
+        LUNA_NATIVE_RESULT_I32_OWNED_ERROR_V1,
+        LUNA_NATIVE_STATUS_DOMAIN_REF_RESULT_OWNER_V1,
+        source.errorValueSize, source.errorValueAlignment,
+        descriptorIdentities());
+}
+
+bool deriveNativeOwnedResultDescriptorV3Candidate(
+    const moon::Module& program, const moon::FunctionDecl& function,
+    const std::string& wrapperLinkageName,
+    NativeOwnedResultDescriptorV3Candidate& candidate, std::string& error) {
+    NativeOwnedResultSourceFacts source;
+    if (!deriveNativeOwnedResultSourceFacts(program, function, source, error))
+        return false;
+    if (!boundedIdentity(wrapperLinkageName) ||
+        wrapperLinkageName == source.sourceLinkageName) {
+        error = "Native v3 candidate has no distinct wrapper linkage";
+        return false;
+    }
+    NativeOwnedResultDescriptorV3Candidate verified;
+    verified.source = std::move(source);
+    verified.wrapperLinkageName = wrapperLinkageName;
+    candidate = std::move(verified);
     error.clear();
     return true;
 }

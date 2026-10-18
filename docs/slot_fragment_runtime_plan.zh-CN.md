@@ -1253,7 +1253,10 @@ producer 现可在私有单 Ref、`Result<i32, E>` fixture 上从封闭的 MoonI
 重算 Ref 的 nominal Slot 目标、`E` 的类型／布局身份，并核对冻结的 Drop 身份。
 回归篡改布局、移除 Drop、改变 Ref 目标均被拒绝；标量 Result 错误类型也不在
 此形态内。这些事实中的 linkage 属于源码函数体，不是 v3 宿主 wrapper 的入口
-或指针。Luna 仍不生成 v3 行，也不赋予可调用的 generation profile。
+或指针。无指针的 producer 候选现可重新推导这些事实，将独立且有界的 UTF-8
+wrapper linkage、固定 profile、冻结的错误类型大小／对齐及十个身份排成 v3 行；
+源码 body linkage、畸形文本和被改动的 owner 布局均被拒绝。它尚未配对生成入口，
+也没有产物 proof 声明。Luna 仍不生成 v3 行，也不赋予可调用的 generation profile。
 
 私有生成的 transfer 入口现对候选拥有型 Err 形态消费这些源码事实，核对生成的 C
 调用约定、参数数目、返回类型、源码 linkage 及错误类型。它的六个参数依次是

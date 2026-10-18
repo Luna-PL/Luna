@@ -5126,6 +5126,48 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         ownedSourceFacts.errorDropContractId !=
             ownedErrorType->dropGlue.contract.value)
         return fail("Native v3 source facts lost frozen identities or layout");
+    const std::string ownedV3WrapperName = "luna_native_owned_result_entry";
+    luna::codegen::NativeOwnedResultDescriptorV3Candidate ownedV3;
+    if (!luna::codegen::deriveNativeOwnedResultDescriptorV3Candidate(
+            *tryApplyModule, *tryApplyResourceReturn, ownedV3WrapperName,
+            ownedV3, ownedSourceError)) {
+        std::cerr << ownedSourceError << '\n';
+        return fail("Native v3 candidate lost its sealed Ref/Result source");
+    }
+    const std::array<std::string, 10> expectedOwnedV3 = {
+        ownedSourceFacts.functionSymbolId,
+        ownedSourceFacts.functionContractId,
+        ownedV3WrapperName,
+        ownedSourceFacts.refSlotSymbolId,
+        ownedSourceFacts.refSlotContractId,
+        ownedSourceFacts.resultTypeId,
+        ownedSourceFacts.errorTypeId,
+        ownedSourceFacts.errorAbiLayoutId,
+        ownedSourceFacts.errorDropSymbolId,
+        ownedSourceFacts.errorDropContractId};
+    std::string expectedOwnedV3Row = "LUNA_NATIVE_EXPORT_V3\n1\n1\n2\n1\n1\n1\n" +
+        std::to_string(ownedSourceFacts.errorValueSize) + '\n' +
+        std::to_string(ownedSourceFacts.errorValueAlignment);
+    for (const auto& identity : expectedOwnedV3)
+        expectedOwnedV3Row += '\n' + identity;
+    if (ownedV3.descriptorIdentities() != expectedOwnedV3 ||
+        ownedV3.canonicalRow() != expectedOwnedV3Row ||
+        !(ownedV3.source == ownedSourceFacts) ||
+        !ownedSourceError.empty() ||
+        luna::codegen::deriveNativeOwnedResultDescriptorV3Candidate(
+            *tryApplyModule, *tryApplyResourceReturn,
+            ownedSourceFacts.sourceLinkageName, ownedV3, ownedSourceError) ||
+        luna::codegen::deriveNativeOwnedResultDescriptorV3Candidate(
+            *tryApplyModule, *tryApplyResourceReturn,
+            "bad\nwrapper", ownedV3, ownedSourceError) ||
+        luna::codegen::deriveNativeOwnedResultDescriptorV3Candidate(
+            *tryApplyModule, *tryApplyResourceReturn,
+            "bad\xc0\xaf", ownedV3, ownedSourceError) ||
+        luna::codegen::deriveNativeOwnedResultDescriptorV3Candidate(
+            *tryApplyModule, *tryApplyResourceReturn,
+            std::string(4096, 'x'), ownedV3, ownedSourceError) ||
+        ownedV3.canonicalRow() != expectedOwnedV3Row)
+        return fail("Native v3 candidate accepted an invalid wrapper or row mapping");
     auto mutableOwnedError = std::find_if(
         tryApplyModule->typeTable.begin(), tryApplyModule->typeTable.end(),
         [&](const moon::TypeRecord& type) {
@@ -5170,8 +5212,13 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         luna::codegen::deriveNativeOwnedResultSourceFacts(
             *tryApplyModule, *tryApplyResourceReturn,
             ownedSourceFacts, ownedSourceError);
+    const bool acceptedForgedV3Row =
+        luna::codegen::deriveNativeOwnedResultDescriptorV3Candidate(
+            *tryApplyModule, *tryApplyResourceReturn,
+            ownedV3WrapperName, ownedV3, ownedSourceError);
     mutableOwnedError->abiLayoutId = frozenLayoutId;
-    if (acceptedForgedLayout)
+    if (acceptedForgedLayout || acceptedForgedV3Row ||
+        ownedV3.canonicalRow() != expectedOwnedV3Row)
         return fail("Native v3 candidate accepted a forged owner layout");
     const auto frozenDropGlue = mutableOwnedError->dropGlue;
     mutableOwnedError->dropGlue = {};

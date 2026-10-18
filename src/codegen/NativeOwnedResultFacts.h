@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <tuple>
@@ -47,6 +48,16 @@ struct NativeOwnedResultSourceFacts {
     }
 };
 
+// Pointer-free producer candidate for one v3 row. The wrapper name remains a
+// claim until generated IR proves that it implements the sealed source body.
+struct NativeOwnedResultDescriptorV3Candidate {
+    NativeOwnedResultSourceFacts source;
+    std::string wrapperLinkageName;
+
+    std::array<std::string, 10> descriptorIdentities() const;
+    std::string canonicalRow() const;
+};
+
 // Test-only pointer-free pairing of a verified generated host entry with its
 // sealed source facts. A real v3 row still needs artifact and loader binding.
 struct NativeOwnedResultEntryProof {
@@ -61,5 +72,10 @@ struct NativeOwnedResultEntryProof {
 bool deriveNativeOwnedResultSourceFacts(
     const moon::Module& program, const moon::FunctionDecl& function,
     NativeOwnedResultSourceFacts& facts, std::string& error);
+
+bool deriveNativeOwnedResultDescriptorV3Candidate(
+    const moon::Module& program, const moon::FunctionDecl& function,
+    const std::string& wrapperLinkageName,
+    NativeOwnedResultDescriptorV3Candidate& candidate, std::string& error);
 
 } // namespace luna::codegen

@@ -1672,7 +1672,12 @@ recomputes the Ref's nominal Slot target and `E`'s type/layout identities,
 and checks frozen Drop identity. Regression mutations of layout, Drop and Ref
 target fail closed; a scalar Result error is outside this shape. These facts
 contain the source body's linkage, not a v3 host wrapper entry or pointer.
-Luna still emits no v3 row or callable generation profile.
+A pointer-free producer candidate now rederives those facts and orders the ten
+v3 row identifiers with a separate bounded UTF-8 wrapper linkage, fixed
+profile and frozen error size/alignment. It rejects the source-body linkage,
+malformed wrapper text and changed owner layout. This candidate has no
+generated-entry pairing or artifact proof claim yet. Luna still emits no v3
+row or callable generation profile.
 
 The private generated transfer entry now consumes those source facts for the
 candidate owned-error shape and checks its emitted C calling convention,
