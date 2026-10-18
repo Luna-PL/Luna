@@ -5168,6 +5168,64 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             std::string(4096, 'x'), ownedV3, ownedSourceError) ||
         ownedV3.canonicalRow() != expectedOwnedV3Row)
         return fail("Native v3 candidate accepted an invalid wrapper or row mapping");
+    llvm::LLVMContext ownedPairContext;
+    llvm::Module ownedPairModule("native-v3-entry-pair", ownedPairContext);
+    auto* ownedPairI32 = llvm::Type::getInt32Ty(ownedPairContext);
+    auto* ownedPairPtr = llvm::PointerType::get(ownedPairContext, 0);
+    auto* ownedPairBody = llvm::Function::Create(
+        llvm::FunctionType::get(ownedPairI32, false),
+        llvm::Function::InternalLinkage,
+        ownedSourceFacts.sourceLinkageName, ownedPairModule);
+    llvm::IRBuilder<> ownedPairBuilder(llvm::BasicBlock::Create(
+        ownedPairContext, "entry", ownedPairBody));
+    ownedPairBuilder.CreateRet(llvm::ConstantInt::get(ownedPairI32, 0));
+    std::vector<llvm::Type*> ownedPairArguments(6, ownedPairPtr);
+    auto ownedHostArguments = ownedPairArguments;
+    ownedHostArguments.push_back(ownedPairI32);
+    auto* ownedPairHost = llvm::Function::Create(
+        llvm::FunctionType::get(ownedPairI32, ownedHostArguments, false),
+        llvm::Function::ExternalLinkage,
+        "luna_native_owned_result_host", ownedPairModule);
+    ownedPairBuilder.SetInsertPoint(llvm::BasicBlock::Create(
+        ownedPairContext, "entry", ownedPairHost));
+    ownedPairBuilder.CreateRet(llvm::ConstantInt::get(ownedPairI32, 0));
+    auto* ownedPairEntry = llvm::Function::Create(
+        llvm::FunctionType::get(ownedPairI32, ownedPairArguments, false),
+        llvm::Function::ExternalLinkage, ownedV3WrapperName, ownedPairModule);
+    ownedPairBuilder.SetInsertPoint(llvm::BasicBlock::Create(
+        ownedPairContext, "entry", ownedPairEntry));
+    std::vector<llvm::Value*> ownedForwarded;
+    for (auto& argument : ownedPairEntry->args())
+        ownedForwarded.push_back(&argument);
+    ownedForwarded.push_back(llvm::ConstantInt::get(ownedPairI32, 0));
+    auto* ownedPairCall = ownedPairBuilder.CreateCall(
+        ownedPairHost, ownedForwarded);
+    ownedPairBuilder.CreateRet(ownedPairCall);
+    luna::codegen::NativeOwnedResultDescriptorV3Candidate pairedOwnedV3;
+    const auto deriveOwnedPair = [&] {
+        return luna::codegen::derivePairedNativeOwnedResultDescriptorV3Candidate(
+            *tryApplyModule, *tryApplyResourceReturn, ownedPairModule,
+            ownedV3WrapperName, ownedPairHost->getName().str(),
+            pairedOwnedV3, ownedSourceError);
+    };
+    if (!deriveOwnedPair() || pairedOwnedV3.canonicalRow() != expectedOwnedV3Row)
+        return fail("Native v3 candidate lost its generated entry pair");
+    ownedPairCall->setArgOperand(6, llvm::ConstantInt::get(ownedPairI32, 1));
+    const bool acceptedInjection = deriveOwnedPair();
+    ownedPairCall->setArgOperand(6, llvm::ConstantInt::get(ownedPairI32, 0));
+    ownedPairCall->setArgOperand(0, ownedPairEntry->getArg(1));
+    const bool acceptedChangedArgument = deriveOwnedPair();
+    ownedPairCall->setArgOperand(0, ownedPairEntry->getArg(0));
+    ownedPairEntry->setCallingConv(llvm::CallingConv::Fast);
+    const bool acceptedChangedCallingConvention = deriveOwnedPair();
+    ownedPairEntry->setCallingConv(llvm::CallingConv::C);
+    ownedPairBody->setLinkage(llvm::Function::ExternalLinkage);
+    const bool acceptedExternalBody = deriveOwnedPair();
+    ownedPairBody->setLinkage(llvm::Function::InternalLinkage);
+    if (acceptedInjection || acceptedChangedArgument ||
+        acceptedChangedCallingConvention || acceptedExternalBody ||
+        pairedOwnedV3.canonicalRow() != expectedOwnedV3Row)
+        return fail("Native v3 candidate accepted a changed generated entry");
     auto mutableOwnedError = std::find_if(
         tryApplyModule->typeTable.begin(), tryApplyModule->typeTable.end(),
         [&](const moon::TypeRecord& type) {

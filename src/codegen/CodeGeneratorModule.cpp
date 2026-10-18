@@ -2904,6 +2904,16 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                         failure = "private Ref Result candidate entry lost its host transfer binding";
                         return false;
                     }
+                    luna::codegen::NativeOwnedResultDescriptorV3Candidate paired;
+                    if (!luna::codegen::derivePairedNativeOwnedResultDescriptorV3Candidate(
+                            program, function, *proof.mModule,
+                            candidateEntry->getName().str(),
+                            hostEntry->getName().str(), paired, failure) ||
+                        !(paired.source == *privateOwnedResultFacts)) {
+                        if (failure.empty())
+                            failure = "private Ref Result entry changed its frozen v3 row";
+                        return false;
+                    }
                     privateOwnedResultEntryProof =
                         luna::codegen::NativeOwnedResultEntryProof{
                             *privateOwnedResultFacts,

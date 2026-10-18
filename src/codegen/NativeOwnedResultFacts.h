@@ -11,6 +11,9 @@ namespace moon {
 struct Module;
 struct FunctionDecl;
 }
+namespace llvm {
+class Module;
+}
 
 namespace luna::codegen {
 
@@ -76,6 +79,15 @@ bool deriveNativeOwnedResultSourceFacts(
 bool deriveNativeOwnedResultDescriptorV3Candidate(
     const moon::Module& program, const moon::FunctionDecl& function,
     const std::string& wrapperLinkageName,
+    NativeOwnedResultDescriptorV3Candidate& candidate, std::string& error);
+
+// Proves the exported six-argument entry calls one defined seven-argument
+// host wrapper with the private injection argument fixed to zero. The host
+// wrapper's ownership and failure CFG require their separate verifier.
+bool derivePairedNativeOwnedResultDescriptorV3Candidate(
+    const moon::Module& program, const moon::FunctionDecl& function,
+    const llvm::Module& generated, const std::string& wrapperLinkageName,
+    const std::string& hostLinkageName,
     NativeOwnedResultDescriptorV3Candidate& candidate, std::string& error);
 
 } // namespace luna::codegen

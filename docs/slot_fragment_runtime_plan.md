@@ -1675,9 +1675,13 @@ contain the source body's linkage, not a v3 host wrapper entry or pointer.
 A pointer-free producer candidate now rederives those facts and orders the ten
 v3 row identifiers with a separate bounded UTF-8 wrapper linkage, fixed
 profile and frozen error size/alignment. It rejects the source-body linkage,
-malformed wrapper text and changed owner layout. This candidate has no
-generated-entry pairing or artifact proof claim yet. Luna still emits no v3
-row or callable generation profile.
+malformed wrapper text and changed owner layout. A producer-side check now
+requires the sealed source body to be defined internally and the external
+six-pointer C entry to forward its arguments exactly once to a defined
+seven-argument host wrapper, fix test injection to zero, and return that
+status. The private JIT path runs this check. It does not yet prove the host
+wrapper's full failure behavior or make an artifact proof claim. Luna still
+emits no v3 row or callable generation profile.
 
 The private generated transfer entry now consumes those source facts for the
 candidate owned-error shape and checks its emitted C calling convention,

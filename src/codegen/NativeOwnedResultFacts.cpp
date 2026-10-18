@@ -7,6 +7,10 @@
 #include "moonir/MoonIRModule.h"
 #include "moonir/Verifier.h"
 
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/Instructions.h>
+#include <llvm/IR/Module.h>
+
 #include <algorithm>
 #include <array>
 #include <utility>
@@ -214,6 +218,66 @@ bool deriveNativeOwnedResultDescriptorV3Candidate(
     NativeOwnedResultDescriptorV3Candidate verified;
     verified.source = std::move(source);
     verified.wrapperLinkageName = wrapperLinkageName;
+    candidate = std::move(verified);
+    error.clear();
+    return true;
+}
+
+bool derivePairedNativeOwnedResultDescriptorV3Candidate(
+    const moon::Module& program, const moon::FunctionDecl& function,
+    const llvm::Module& generated, const std::string& wrapperLinkageName,
+    const std::string& hostLinkageName,
+    NativeOwnedResultDescriptorV3Candidate& candidate, std::string& error) {
+    NativeOwnedResultDescriptorV3Candidate verified;
+    if (!deriveNativeOwnedResultDescriptorV3Candidate(
+            program, function, wrapperLinkageName, verified, error))
+        return false;
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    const auto* body = generated.getFunction(
+        verified.source.sourceLinkageName);
+    const auto* entry = generated.getFunction(wrapperLinkageName);
+    const auto* host = generated.getFunction(hostLinkageName);
+    const auto exactEntry = [](const llvm::Function* value,
+                               unsigned pointerCount,
+                               bool injection) {
+        if (!value || value->isDeclaration() || value->isVarArg() ||
+            value->getCallingConv() != llvm::CallingConv::C ||
+            !value->getReturnType()->isIntegerTy(32) ||
+            value->arg_size() != pointerCount + (injection ? 1u : 0u))
+            return false;
+        for (unsigned index = 0; index < pointerCount; ++index)
+            if (!value->getArg(index)->getType()->isPointerTy() ||
+                value->getArg(index)->getType()->getPointerAddressSpace() != 0)
+                return false;
+        return !injection ||
+            value->getArg(pointerCount)->getType()->isIntegerTy(32);
+    };
+    if (!body || body->isDeclaration() || !body->hasInternalLinkage() ||
+        !exactEntry(entry, 6, false) || !entry->hasExternalLinkage() ||
+        !exactEntry(host, 6, true) || !host->hasExternalLinkage() ||
+        entry == host || entry->size() != 1)
+        return reject("Native v3 candidate lacks its exact generated entry pair");
+    const auto& block = entry->getEntryBlock();
+    if (block.size() != 2)
+        return reject("Native v3 candidate entry has extra instructions");
+    const auto* call = llvm::dyn_cast<llvm::CallInst>(&block.front());
+    const auto* returned = llvm::dyn_cast<llvm::ReturnInst>(
+        block.getTerminator());
+    if (!call || call->getCalledFunction() != host ||
+        call->getCallingConv() != llvm::CallingConv::C ||
+        call->arg_size() != 7 || !returned ||
+        returned->getReturnValue() != call)
+        return reject("Native v3 candidate entry does not return its host call");
+    for (unsigned index = 0; index < 6; ++index)
+        if (call->getArgOperand(index) != entry->getArg(index))
+            return reject("Native v3 candidate entry changed a host argument");
+    const auto* injection = llvm::dyn_cast<llvm::ConstantInt>(
+        call->getArgOperand(6));
+    if (!injection || !injection->isZero())
+        return reject("Native v3 candidate entry enables test injection");
     candidate = std::move(verified);
     error.clear();
     return true;

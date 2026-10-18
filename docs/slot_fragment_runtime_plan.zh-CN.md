@@ -1255,8 +1255,11 @@ producer 现可在私有单 Ref、`Result<i32, E>` fixture 上从封闭的 MoonI
 此形态内。这些事实中的 linkage 属于源码函数体，不是 v3 宿主 wrapper 的入口
 或指针。无指针的 producer 候选现可重新推导这些事实，将独立且有界的 UTF-8
 wrapper linkage、固定 profile、冻结的错误类型大小／对齐及十个身份排成 v3 行；
-源码 body linkage、畸形文本和被改动的 owner 布局均被拒绝。它尚未配对生成入口，
-也没有产物 proof 声明。Luna 仍不生成 v3 行，也不赋予可调用的 generation profile。
+源码 body linkage、畸形文本和被改动的 owner 布局均被拒绝。生产侧校验现要求
+源码 body 在生成模块内定义为内部链接，外部六指针参数 C 入口须将参数原样转发给
+已定义的七参数宿主 wrapper、把测试注入参数固定为零，并返回其状态。私有 JIT
+路径已执行该校验；宿主 wrapper 的完整失败行为和产物 proof 声明仍未由此证明。
+Luna 仍不生成 v3 行，也不赋予可调用的 generation profile。
 
 私有生成的 transfer 入口现对候选拥有型 Err 形态消费这些源码事实，核对生成的 C
 调用约定、参数数目、返回类型、源码 linkage 及错误类型。它的六个参数依次是
