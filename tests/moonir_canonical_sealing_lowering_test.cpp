@@ -5276,8 +5276,17 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto* ownedHostTag = ownedPairBuilder.CreateAlloca(ownedPairI32);
     auto* ownedHostScalar = ownedPairBuilder.CreateAlloca(ownedPairI32);
     auto* ownedHostCell = ownedPairBuilder.CreateAlloca(ownedPairPtr);
+    auto* ownedTagNonnull = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateIsNotNull(ownedPairHost->getArg(2)));
+    auto* ownedScalarNonnull = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateIsNotNull(ownedPairHost->getArg(3)));
+    auto* ownedOwnerNonnull = llvm::cast<llvm::ICmpInst>(
+        ownedPairBuilder.CreateIsNotNull(ownedPairHost->getArg(4)));
+    auto* ownedOutputNonNull = ownedPairBuilder.CreateAnd(
+        ownedTagNonnull,
+        ownedPairBuilder.CreateAnd(ownedScalarNonnull, ownedOwnerNonnull));
     auto* ownedPreflightBranch = ownedPairBuilder.CreateCondBr(
-        ownedPairBuilder.CreateIsNotNull(ownedPairHost->getArg(2)),
+        ownedOutputNonNull,
         ownedHostCheckOwner, ownedHostInvalidOutput);
     ownedPairBuilder.SetInsertPoint(ownedHostCheckOwner);
     auto* ownedOwnerOutLoad = ownedPairBuilder.CreateLoad(
@@ -5437,6 +5446,29 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         acceptedWrongOutputStatus || acceptedWrongLeaseStatus ||
         acceptedBypassedGates || !verifyOwnedGates())
         return fail("Native v3 host accepted altered owner or lease gates");
+    const auto verifyOwnedOutputNonNull = [&] {
+        return luna::codegen::verifyNativeOwnedResultHostOutputNonNull(
+            ownedPairModule, ownedPairHost->getName().str(),
+            ownedSourceError);
+    };
+    if (!verifyOwnedOutputNonNull())
+        return fail("Native v3 host lost its three non-null output guards");
+    ownedTagNonnull->setOperand(0, ownedPairHost->getArg(0));
+    const bool acceptedWrongTagGuard = verifyOwnedOutputNonNull();
+    ownedTagNonnull->setOperand(0, ownedPairHost->getArg(2));
+    ownedScalarNonnull->setPredicate(llvm::ICmpInst::ICMP_EQ);
+    const bool acceptedNullScalar = verifyOwnedOutputNonNull();
+    ownedScalarNonnull->setPredicate(llvm::ICmpInst::ICMP_NE);
+    ownedOwnerNonnull->setOperand(0, ownedPairHost->getArg(5));
+    const bool acceptedWrongOwnerGuard = verifyOwnedOutputNonNull();
+    ownedOwnerNonnull->setOperand(0, ownedPairHost->getArg(4));
+    ownedPreflightBranch->setCondition(ownedTagNonnull);
+    const bool acceptedMissingOutputGuards = verifyOwnedOutputNonNull();
+    ownedPreflightBranch->setCondition(ownedOutputNonNull);
+    if (acceptedWrongTagGuard || acceptedNullScalar ||
+        acceptedWrongOwnerGuard || acceptedMissingOutputGuards ||
+        !verifyOwnedOutputNonNull())
+        return fail("Native v3 host accepted altered output non-null guards");
     auto mutableOwnedError = std::find_if(
         tryApplyModule->typeTable.begin(), tryApplyModule->typeTable.end(),
         [&](const moon::TypeRecord& type) {

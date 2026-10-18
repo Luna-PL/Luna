@@ -30,6 +30,27 @@ bool boundedIdentity(const std::string& value) {
         }) && luna::driver::validNativeDescriptorUtf8(value);
 }
 
+bool hasRequiredNonnullConjunct(const llvm::Value* condition,
+                                const llvm::Value* output,
+                                unsigned remaining = 32) {
+    if (!remaining) return false;
+    if (const auto* conjunction = llvm::dyn_cast<llvm::BinaryOperator>(
+            condition); conjunction &&
+        conjunction->getOpcode() == llvm::Instruction::And &&
+        conjunction->getType()->isIntegerTy(1))
+        return hasRequiredNonnullConjunct(conjunction->getOperand(0),
+                                          output, remaining - 1) ||
+            hasRequiredNonnullConjunct(conjunction->getOperand(1),
+                                       output, remaining - 1);
+    const auto* comparison = llvm::dyn_cast<llvm::ICmpInst>(condition);
+    return comparison &&
+        comparison->getPredicate() == llvm::ICmpInst::ICMP_NE &&
+        ((comparison->getOperand(0) == output &&
+          llvm::isa<llvm::ConstantPointerNull>(comparison->getOperand(1))) ||
+         (comparison->getOperand(1) == output &&
+          llvm::isa<llvm::ConstantPointerNull>(comparison->getOperand(0))));
+}
+
 } // namespace
 
 bool deriveNativeOwnedResultSourceFacts(
@@ -631,6 +652,44 @@ bool verifyNativeOwnedResultHostOwnerLeaseGates(
     for (const auto* predecessor : llvm::predecessors(invalidOutput))
         if (predecessor != entry && predecessor != ownerBlock)
             return reject("Native v3 host output failure has another ingress");
+    error.clear();
+    return true;
+}
+
+bool verifyNativeOwnedResultHostOutputNonNull(
+    const llvm::Module& generated, const std::string& hostLinkageName,
+    std::string& error) {
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    const auto* host = generated.getFunction(hostLinkageName);
+    if (!host || host->isDeclaration() || host->isVarArg() ||
+        host->getCallingConv() != llvm::CallingConv::C ||
+        !host->getReturnType()->isIntegerTy(32) ||
+        host->arg_size() != 7 || !host->hasExternalLinkage())
+        return reject("Native v3 host output check lacks its C profile");
+    const auto* branch = llvm::dyn_cast<llvm::BranchInst>(
+        host->getEntryBlock().getTerminator());
+    if (!branch || !branch->isConditional())
+        return reject("Native v3 host output check lost its entry fork");
+    for (unsigned index = 2; index <= 4; ++index) {
+        const auto* output = host->getArg(index);
+        if (!output->getType()->isPointerTy() ||
+            output->getType()->getPointerAddressSpace() != 0 ||
+            !hasRequiredNonnullConjunct(branch->getCondition(), output))
+            return reject("Native v3 host output check lost a non-null guard");
+    }
+    const auto* invalid = branch->getSuccessor(1);
+    const auto* returned = invalid->size() == 1
+        ? llvm::dyn_cast<llvm::ReturnInst>(
+            invalid->getTerminator()) : nullptr;
+    const auto* status = returned
+        ? llvm::dyn_cast_or_null<llvm::ConstantInt>(
+            returned->getReturnValue()) : nullptr;
+    if (!status || status->getZExtValue() !=
+            LUNA_NATIVE_REF_RESULT_OWNER_INVALID_OUTPUT_V1)
+        return reject("Native v3 host output check lost its failure status");
     error.clear();
     return true;
 }

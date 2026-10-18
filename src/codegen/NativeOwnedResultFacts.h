@@ -111,4 +111,11 @@ bool verifyNativeOwnedResultHostOwnerLeaseGates(
     const llvm::Module& generated, const std::string& hostLinkageName,
     const std::string& transferLinkageName, std::string& error);
 
+// Proves the entry success edge requires all three caller output pointers to
+// be non-null and the other edge returns the invalid-output status. Alignment
+// and disjointness remain separate checks.
+bool verifyNativeOwnedResultHostOutputNonNull(
+    const llvm::Module& generated, const std::string& hostLinkageName,
+    std::string& error);
+
 } // namespace luna::codegen

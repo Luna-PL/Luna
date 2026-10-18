@@ -1697,7 +1697,10 @@ This does not yet prove output preflight or cleanup inside the transfer body.
 The producer-side owner/lease gate check now binds the caller owner-cell load
 and Runtime lease check to the host arguments. An occupied cell returns status
 `1`, and a non-live lease returns status `9`; transfer has a single predecessor
-through these gates. The entry output-validity expression remains unproved.
+through these gates. The entry output-validity expression still needs proof.
+The producer-side output check now proves that the entry success edge requires
+the tag, scalar and owner output pointers all to be non-null. The failure edge
+returns status `1`. Alignment and pairwise non-overlap remain unproved.
 
 The private generated transfer entry now consumes those source facts for the
 candidate owned-error shape and checks its emitted C calling convention,
