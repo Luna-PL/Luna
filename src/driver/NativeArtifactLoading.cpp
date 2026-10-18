@@ -471,6 +471,16 @@ bool validateNativeDescriptorV3(
         return false;
     }
     std::string packageId, packageVersion, targetAbi, compilerIdentity;
+    const char* libraryStrings[] = {
+        descriptor->package_id, descriptor->package_version,
+        descriptor->target_abi, descriptor->compiler_identity};
+    if (!std::all_of(std::begin(libraryStrings), std::end(libraryStrings),
+            [&](const char* value) {
+                return nativeAddressInStagedImage(handle, stagedPath, value);
+            })) {
+        error = "Native v3 library identity is outside its verified image";
+        return false;
+    }
     if (!descriptorString(descriptor->package_id, packageId) ||
         !descriptorString(descriptor->package_version, packageVersion) ||
         !descriptorString(descriptor->target_abi, targetAbi) ||
@@ -515,6 +525,13 @@ bool validateNativeDescriptorV3(
             row.ref_slot_symbol_id, row.ref_slot_contract_id,
             row.result_type_id, row.error_type_id, row.error_abi_layout_id,
             row.error_drop_symbol_id, row.error_drop_contract_id};
+        if (!std::all_of(std::begin(rawIdentifiers), std::end(rawIdentifiers),
+                [&](const char* value) {
+                    return nativeAddressInStagedImage(handle, stagedPath, value);
+                })) {
+            error = "Native v3 export identity is outside its verified image";
+            return false;
+        }
         std::array<std::string, 10> identifiers;
         bool validIdentifiers = true;
         for (size_t field = 0; field < identifiers.size(); ++field)

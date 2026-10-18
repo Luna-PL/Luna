@@ -1792,9 +1792,10 @@ facts in the retained JIT module. The next production step is to carry that
 typed proof into a generated v3 row and `PinnedBinding`. The v3 loader now
 rejects v1 entry aliases and validates an independently resolved six-argument
 symbol in the staged image. It also checks that the returned descriptor and
-export table belong to that image before reading them; independent fixtures
-copy otherwise valid metadata to the heap to exercise both rejections. Its
-read-only lookup exposes only candidate
+export table belong to that image before reading them, and checks the image
+origin of each library and row identity string before decoding it. Independent
+fixtures copy otherwise valid metadata or unchanged identity text to the heap
+to exercise all four rejections. Its read-only lookup exposes only candidate
 presence; a production descriptor binding and pinned typed call path are still
 required. Generated entry
 tests for every real failure phase, plus Runtime-owned handle/Drop behavior
