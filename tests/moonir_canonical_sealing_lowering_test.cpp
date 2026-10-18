@@ -6415,6 +6415,34 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     if (acceptedSourceDoubleDeallocation || acceptedSourceNonreturnExit ||
         !verifyTransferGraph())
         return fail("Native v3 transfer accepted an unsafe source Drop effect");
+    auto* sourceDropHelper = llvm::Function::Create(
+        ownedCleanupDrop->getFunctionType(), llvm::Function::InternalLinkage,
+        "luna_native_owned_cleanup_helper", ownedPairModule);
+    llvm::IRBuilder<> helperBuilder(llvm::BasicBlock::Create(
+        ownedPairContext, "entry", sourceDropHelper));
+    auto* helperDealloc = helperBuilder.CreateCall(ownedCleanupDealloc,
+        {sourceDropHelper->getArg(0),
+         llvm::ConstantInt::get(ownedPairSize, 4),
+         llvm::ConstantInt::get(ownedPairSize, 4)});
+    helperBuilder.CreateRetVoid();
+    llvm::IRBuilder<> sourceHelperBuilder(
+        ownedCleanupDrop->getEntryBlock().getTerminator());
+    auto* sourceHelperCall = sourceHelperBuilder.CreateCall(
+        sourceDropHelper, {ownedCleanupDrop->getArg(0)});
+    const bool acceptedHiddenDeallocation = verifyTransferGraph();
+    helperDealloc->eraseFromParent();
+    const bool acceptedBoundedHelper = verifyTransferGraph();
+    llvm::IRBuilder<> recursiveHelperBuilder(
+        sourceDropHelper->getEntryBlock().getTerminator());
+    auto* recursiveHelperCall = recursiveHelperBuilder.CreateCall(
+        sourceDropHelper, {sourceDropHelper->getArg(0)});
+    const bool acceptedRecursiveHelper = verifyTransferGraph();
+    recursiveHelperCall->eraseFromParent();
+    sourceHelperCall->eraseFromParent();
+    sourceDropHelper->eraseFromParent();
+    if (acceptedHiddenDeallocation || !acceptedBoundedHelper ||
+        acceptedRecursiveHelper || !verifyTransferGraph())
+        return fail("Native v3 transfer accepted an unsafe Drop helper graph");
     auto* orphanTransferBlock = llvm::BasicBlock::Create(
         ownedPairContext, "orphan", ownedCleanupTransfer);
     llvm::IRBuilder<> orphanTransferBuilder(orphanTransferBlock);
@@ -6494,6 +6522,14 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     };
     if (!verifyNestedCleanup() || !verifyNestedTransferGraph())
         return fail("Native v3 transfer lost nested cleanup provenance");
+    llvm::IRBuilder<> duplicateNestedDropBuilder(
+        ownedCleanupDrop->getEntryBlock().getTerminator());
+    auto* duplicateNestedDrop = duplicateNestedDropBuilder.CreateCall(
+        nestedCleanupDrop, {ownedCleanupDrop->getArg(0)});
+    const bool acceptedDuplicateNestedDrop = verifyNestedCleanup();
+    duplicateNestedDrop->eraseFromParent();
+    if (acceptedDuplicateNestedDrop || !verifyNestedCleanup())
+        return fail("Native v3 transfer accepted a duplicate nested source Drop");
     nestedCleanupDrop->setLinkage(llvm::Function::ExternalLinkage);
     const bool acceptedExternalNestedDrop = verifyNestedCleanup();
     nestedCleanupDrop->setLinkage(llvm::Function::InternalLinkage);

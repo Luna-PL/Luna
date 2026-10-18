@@ -1772,9 +1772,12 @@ defined internal source body in the same generated module with the exact
 `void(ptr)` C profile; a declaration, external body or changed calling
 convention fails the producer check. Their generated bodies also reject direct
 `rt_dealloc`, self-calls, indirect calls, explicit nonreturn exits and calls
-marked nonreturn. Synthetic root and nested Drop mutations exercise the
-direct-deallocation check. Effects of other callees, termination of loops and
-any artifact proof claim remain separate.
+marked nonreturn. The check follows internal helpers transitively, rejects
+call cycles and any call back into the cleanup tree, and rejects deallocation
+hidden in an internal helper. Synthetic mutations exercise direct and hidden
+deallocation, recursive helpers and duplicate nested Drop calls. Effects of
+external callees, termination of loops and any artifact proof claim remain
+separate.
 The producer-side host closed-graph check composes all of those branch and
 preflight verifiers. It requires exactly 18 reachable blocks, three entry
 scratch allocations, four non-volatile loads, four stores to the checked
@@ -2566,10 +2569,10 @@ not a public ABI decision or stable-release approval:
    do not Drop. Up to three structs in one ownership chain now have recursive
    cleanup and ordered Drop/deallocation proof. The cleanup verifier also
    binds every recursive Drop call to a defined internal generated source
-   body with the exact C profile and rejects direct deallocation and nonreturn
-   paths. Other Drop-body effects still need proof. A
-   bounded three-node fork with two independently owned fields now has ordered
-   `?` Err and injected-failure
+   body with the exact C profile, follows its internal helper graph and rejects
+   deallocation, cleanup reentry, call cycles and nonreturn paths. External
+   callee effects still need proof. A bounded three-node fork with two
+   independently owned fields now has ordered `?` Err and injected-failure
    cleanup evidence on both local platforms, including focused ASAN runs.
    Larger or wider owned-field graphs remain outside the proof. A test-only
    host-transfer entry now proves three disjoint output cells, the empty
@@ -2579,8 +2582,17 @@ not a public ABI decision or stable-release approval:
    ownership carrier and production post-body failure statuses still need a
    contract and executable proof; the private injected failure now proves
    cleanup of an uncommitted returned owner.
-   Specify recoverable derivation/dispatch
-   failure cleanup before publishing a path that can return those failures.
+   Specify recoverable derivation/dispatch failure cleanup before publishing a
+   path that can return those failures.
+   The current Result body returns only the LLVM Result aggregate; unlike the
+   private unit-status body, failed context derivation or Slot dispatch still
+   Drops active contexts and traps. Its transfer wrapper therefore cannot
+   claim public execution-failure status `3`. The next implementation slice
+   needs a private status-bearing Result body protocol, failure propagation
+   through outlined continuations and a transfer check that keeps all caller
+   outputs untouched on that real failure edge. Prove the emitted cleanup
+   order and exercise failure followed by a successful call before binding a
+   public v3 status domain.
    Every admitted exit must release contexts in
    inner-to-outer order exactly once, after apply-local cleanup and before a
    borrowed Ref owner is dropped. Keep unsupported paths rejected meanwhile.

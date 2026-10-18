@@ -1453,6 +1453,43 @@ bool verifyNativeOwnedResultTransferCleanupProvenance(
         cleanupNodes.front().parentIndex != 0 ||
         cleanupNodes.front().fieldOffset != 0)
         return reject("Native v3 transfer cleanup lacks a bounded owner tree");
+    llvm::SmallPtrSet<const llvm::Function*, 16> activeDropCalls;
+    llvm::SmallPtrSet<const llvm::Function*, 16> checkedDropCalls;
+    const auto inspectDropCalls = [&](const auto& self,
+                                      const llvm::Function* current) -> bool {
+        if (activeDropCalls.contains(current))
+            return reject("Native v3 source Drop has a recursive call graph");
+        if (checkedDropCalls.contains(current)) return true;
+        if (activeDropCalls.size() >= 64 || checkedDropCalls.size() >= 128)
+            return reject("Native v3 source Drop helper graph exceeds its bound");
+        activeDropCalls.insert(current);
+        for (const auto& block : *current)
+            for (const auto& instruction : block) {
+                if (llvm::isa<llvm::InvokeInst>(instruction) ||
+                    llvm::isa<llvm::CallBrInst>(instruction) ||
+                    llvm::isa<llvm::ResumeInst>(instruction) ||
+                    llvm::isa<llvm::UnreachableInst>(instruction))
+                    return reject("Native v3 source Drop has an unbounded exit");
+                const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                    &instruction);
+                if (!call) continue;
+                const auto* callee = call->getCalledFunction();
+                if (!callee || callee->getName() == "rt_dealloc" ||
+                    callee->hasFnAttribute(llvm::Attribute::NoReturn))
+                    return reject("Native v3 source Drop has an unbounded call");
+                for (const auto& node : cleanupNodes)
+                    if (callee->getName() == node.dropLinkageName)
+                        return reject("Native v3 source Drop calls another cleanup body");
+                if (!callee->isDeclaration()) {
+                    if (!callee->hasInternalLinkage())
+                        return reject("Native v3 source Drop has an external helper body");
+                    if (!self(self, callee)) return false;
+                }
+            }
+        activeDropCalls.erase(current);
+        checkedDropCalls.insert(current);
+        return true;
+    };
     for (size_t index = 0; index < cleanupNodes.size(); ++index) {
         const auto& node = cleanupNodes[index];
         if (node.dropLinkageName.empty() ||
@@ -1470,22 +1507,7 @@ bool verifyNativeOwnedResultTransferCleanupProvenance(
             !drop->getArg(0)->getType()->isPointerTy() ||
             drop->getArg(0)->getType()->getPointerAddressSpace() != 0)
             return reject("Native v3 transfer cleanup has no generated source Drop body");
-        for (const auto& block : *drop)
-            for (const auto& instruction : block) {
-                if (llvm::isa<llvm::InvokeInst>(instruction) ||
-                    llvm::isa<llvm::CallBrInst>(instruction) ||
-                    llvm::isa<llvm::ResumeInst>(instruction) ||
-                    llvm::isa<llvm::UnreachableInst>(instruction))
-                    return reject("Native v3 source Drop has an unbounded exit");
-                if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
-                        &instruction)) {
-                    const auto* callee = call->getCalledFunction();
-                    if (!callee || callee == drop ||
-                        callee->getName() == "rt_dealloc" ||
-                        callee->hasFnAttribute(llvm::Attribute::NoReturn))
-                        return reject("Native v3 source Drop has an unbounded call");
-                }
-            }
+        if (!inspectDropCalls(inspectDropCalls, drop)) return false;
         if (index == 0) continue;
         if (node.parentIndex >= index ||
             cleanupNodes[node.parentIndex].allocationSize < sizeof(void*) ||
