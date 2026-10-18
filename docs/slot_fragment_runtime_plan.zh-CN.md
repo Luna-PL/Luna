@@ -1263,18 +1263,20 @@ Luna 仍不生成 v3 行，也不赋予可调用的 generation profile。
 生产侧 adoption 分支校验现将 Runtime 收养调用绑定到返回的 owner、精确生成的
 Drop 入口、代码 lease 和调用方 owner cell。只有成功状态能进入所核对的最终标签
 写入块；失败边对同一局部 owner cell 执行 Drop 并返回状态 `8`。私有 JIT 路径
-已执行该校验，且篡改 lease、分支、Drop、失败状态或标签目标均被拒绝。输出预检、
-transfer 失败清理及宿主状态图的整体性质仍需单独的生产证明。
+已执行该校验，且篡改 lease、分支、Drop、失败状态或标签目标均被拒绝。transfer
+函数内部的失败清理及宿主状态图的整体性质仍需单独的生产证明。
 生产侧 transfer 分支校验还要求单次调用传入原始 parent 和 Ref、各自独立的局部
 标签／标量／owner 暂存 cell、已置空的 owner cell，以及为零的测试注入参数。
-失败边直接返回 transfer 状态；只有成功边进入该分支的成功后继块。这尚未证明
-输出预检或 transfer 函数内部的清理。
+失败边直接返回 transfer 状态；只有成功边进入该分支的成功后继块。输出预检在
+下文单独校验；这些宿主检查尚未证明 transfer 函数内部的清理。
 生产侧 owner／lease 门禁校验将调用方 owner cell 的读取和 Runtime lease 检查
 绑定到宿主参数。owner cell 非空返回状态 `1`，lease 非存活返回状态 `9`；
-transfer 只能从这两道门禁后的单一前驱进入。入口处的输出有效性表达式尚需完整证明。
+transfer 只能从这两道门禁后的单一前驱进入。入口处的输出有效性表达式见下文校验。
 生产侧输出检查现证明入口成功边要求 tag、scalar、owner 三个输出指针均非空；
 失败边返回状态 `1`。独立的对齐校验还要求成功边包含三个指针对应的生成 ABI
-对齐掩码条件。两两不重叠条件仍未证明。
+对齐掩码条件。三组地址间距校验现分别绑定 tag／scalar、tag／owner 和
+scalar／owner 的生成 ABI 大小。这些校验共同证明入口成功边在读取 owner cell
+之前满足输出有效性要求。
 
 私有生成的 transfer 入口现对候选拥有型 Err 形态消费这些源码事实，核对生成的 C
 调用约定、参数数目、返回类型、源码 linkage 及错误类型。它的六个参数依次是

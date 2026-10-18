@@ -101,6 +101,66 @@ bool hasRequiredAlignmentConjunct(const llvm::Value* condition,
         });
 }
 
+bool hasRequiredDisjointConjunct(const llvm::Value* condition,
+                                 const llvm::Value* left,
+                                 uint64_t leftSize,
+                                 const llvm::Value* right,
+                                 uint64_t rightSize) {
+    return hasRequiredConjunct(condition,
+        [left, leftSize, right, rightSize](const llvm::Value* value) {
+            const auto* disjoint = llvm::dyn_cast<llvm::SelectInst>(value);
+            const auto* before = disjoint
+                ? llvm::dyn_cast<llvm::ICmpInst>(
+                    disjoint->getCondition()) : nullptr;
+            if (!before || before->getPredicate() !=
+                    llvm::ICmpInst::ICMP_ULT)
+                return false;
+            const auto* leftAddress = llvm::dyn_cast<llvm::PtrToIntInst>(
+                before->getOperand(0));
+            const auto* rightAddress = llvm::dyn_cast<llvm::PtrToIntInst>(
+                before->getOperand(1));
+            if (!leftAddress || !rightAddress ||
+                leftAddress->getPointerOperand() != left ||
+                rightAddress->getPointerOperand() != right ||
+                !leftAddress->getType()->isIntegerTy(sizeof(void*) * 8) ||
+                rightAddress->getType() != leftAddress->getType())
+                return false;
+            const auto* leftGap = llvm::dyn_cast<llvm::ICmpInst>(
+                disjoint->getTrueValue());
+            const auto* rightGap = llvm::dyn_cast<llvm::ICmpInst>(
+                disjoint->getFalseValue());
+            if (!leftGap || !rightGap ||
+                leftGap->getPredicate() != llvm::ICmpInst::ICMP_UGE ||
+                rightGap->getPredicate() != llvm::ICmpInst::ICMP_UGE ||
+                leftGap->getOperand(0) != rightGap->getOperand(0))
+                return false;
+            const auto* gap = llvm::dyn_cast<llvm::SelectInst>(
+                leftGap->getOperand(0));
+            const auto* leftExtent = llvm::dyn_cast<llvm::ConstantInt>(
+                leftGap->getOperand(1));
+            const auto* rightExtent = llvm::dyn_cast<llvm::ConstantInt>(
+                rightGap->getOperand(1));
+            if (!gap || gap->getCondition() != before ||
+                !leftExtent || !rightExtent ||
+                leftExtent->getBitWidth() != sizeof(void*) * 8 ||
+                rightExtent->getBitWidth() != sizeof(void*) * 8 ||
+                leftExtent->getZExtValue() != leftSize ||
+                rightExtent->getZExtValue() != rightSize)
+                return false;
+            const auto* forward = llvm::dyn_cast<llvm::BinaryOperator>(
+                gap->getTrueValue());
+            const auto* backward = llvm::dyn_cast<llvm::BinaryOperator>(
+                gap->getFalseValue());
+            return forward && backward &&
+                forward->getOpcode() == llvm::Instruction::Sub &&
+                backward->getOpcode() == llvm::Instruction::Sub &&
+                forward->getOperand(0) == rightAddress &&
+                forward->getOperand(1) == leftAddress &&
+                backward->getOperand(0) == leftAddress &&
+                backward->getOperand(1) == rightAddress;
+        });
+}
+
 } // namespace
 
 bool deriveNativeOwnedResultSourceFacts(
@@ -759,6 +819,47 @@ bool verifyNativeOwnedResultHostOutputAlignment(
         if (!hasRequiredAlignmentConjunct(
                 condition, host->getArg(index + 2), alignments[index])) {
             error = "Native v3 host output check lost an alignment guard";
+            return false;
+        }
+    error.clear();
+    return true;
+}
+
+bool verifyNativeOwnedResultHostOutputDisjointness(
+    const llvm::Module& generated, const std::string& hostLinkageName,
+    std::string& error) {
+    if (!verifyNativeOwnedResultHostOutputAlignment(
+            generated, hostLinkageName, error))
+        return false;
+    const auto* host = generated.getFunction(hostLinkageName);
+    const auto* condition = llvm::cast<llvm::BranchInst>(
+        host->getEntryBlock().getTerminator())->getCondition();
+    struct OutputPair {
+        unsigned left;
+        uint64_t leftSize;
+        unsigned right;
+        uint64_t rightSize;
+    };
+    const std::array<OutputPair, 3> pairs = {{
+        {2, sizeof(uint32_t), 3, sizeof(int32_t)},
+        {2, sizeof(uint32_t), 4, sizeof(void*)},
+        {3, sizeof(int32_t), 4, sizeof(void*)},
+    }};
+    for (const auto& pair : pairs)
+        if (!hasRequiredDisjointConjunct(
+                condition, host->getArg(pair.left), pair.leftSize,
+                host->getArg(pair.right), pair.rightSize)) {
+            error = "Native v3 host output check lost a disjointness guard";
+            return false;
+        }
+    for (const auto& instruction : host->getEntryBlock())
+        if (!llvm::isa<llvm::AllocaInst>(&instruction) &&
+            !llvm::isa<llvm::PtrToIntInst>(&instruction) &&
+            !llvm::isa<llvm::ICmpInst>(&instruction) &&
+            !llvm::isa<llvm::BinaryOperator>(&instruction) &&
+            !llvm::isa<llvm::SelectInst>(&instruction) &&
+            !llvm::isa<llvm::BranchInst>(&instruction)) {
+            error = "Native v3 host output check accesses memory before preflight";
             return false;
         }
     error.clear();

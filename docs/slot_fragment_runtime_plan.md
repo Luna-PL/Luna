@@ -1687,22 +1687,26 @@ the loaded owner, exact generated Drop entry, lease and caller's owner cell.
 Only its successful status reaches the identified final tag-store block; the
 failure edge drops that same local owner cell and returns status `8`. The
 private JIT path runs this check and rejects altered lease, branch, Drop,
-failure status or tag destination. Output preflight, transfer failure cleanup
-and the full host status graph still need independent production proof.
+failure status or tag destination. Transfer-body failure cleanup and the full
+host status graph still need independent production proof.
 The producer-side transfer-fork check also requires one call with the original
 parent and Ref, distinct local tag/scalar/owner scratch cells, a null-initialized
 owner cell and zero test injection. Its failure edge returns the transfer
 status directly; only success reaches the branch's success continuation.
-This does not yet prove output preflight or cleanup inside the transfer body.
+Output preflight is checked separately below; cleanup inside the transfer body
+remains unproved by these host checks.
 The producer-side owner/lease gate check now binds the caller owner-cell load
 and Runtime lease check to the host arguments. An occupied cell returns status
 `1`, and a non-live lease returns status `9`; transfer has a single predecessor
-through these gates. The entry output-validity expression still needs proof.
+through these gates. The entry output-validity expression is checked below.
 The producer-side output check now proves that the entry success edge requires
 the tag, scalar and owner output pointers all to be non-null. The failure edge
 returns status `1`. A separate alignment check now requires the entry success
 edge to include the generated ABI alignment mask for each of those pointers.
-Pairwise non-overlap remains unproved.
+Three pairwise address-gap checks now bind the tag/scalar, tag/owner and
+scalar/owner regions to their generated ABI sizes. Together these checks prove
+that the entry success edge satisfies output validity before the owner-cell
+load.
 
 The private generated transfer entry now consumes those source facts for the
 candidate owned-error shape and checks its emitted C calling convention,

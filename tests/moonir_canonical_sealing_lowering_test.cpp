@@ -5302,11 +5302,43 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         ownedPairHost->getArg(3), alignof(int32_t));
     auto* ownedOwnerAligned = ownedAligned(
         ownedPairHost->getArg(4), alignof(void*));
-    auto* ownedOutputChecks = ownedPairBuilder.CreateAnd(
+    auto* ownedOutputAligned = ownedPairBuilder.CreateAnd(
         ownedOutputNonNull,
         ownedPairBuilder.CreateAnd(ownedTagAligned,
             ownedPairBuilder.CreateAnd(ownedScalarAligned,
                                        ownedOwnerAligned)));
+    const auto ownedDisjoint = [&](llvm::Value* left, uint64_t leftSize,
+                                   llvm::Value* right, uint64_t rightSize) {
+        auto* leftAddress = ownedPairBuilder.CreatePtrToInt(
+            left, ownedPairSize);
+        auto* rightAddress = ownedPairBuilder.CreatePtrToInt(
+            right, ownedPairSize);
+        auto* before = ownedPairBuilder.CreateICmpULT(
+            leftAddress, rightAddress);
+        auto* gap = ownedPairBuilder.CreateSelect(before,
+            ownedPairBuilder.CreateSub(rightAddress, leftAddress),
+            ownedPairBuilder.CreateSub(leftAddress, rightAddress));
+        return llvm::cast<llvm::SelectInst>(ownedPairBuilder.CreateSelect(
+            before,
+            ownedPairBuilder.CreateICmpUGE(gap,
+                llvm::ConstantInt::get(ownedPairSize, leftSize)),
+            ownedPairBuilder.CreateICmpUGE(gap,
+                llvm::ConstantInt::get(ownedPairSize, rightSize))));
+    };
+    auto* ownedTagScalarDisjoint = ownedDisjoint(
+        ownedPairHost->getArg(2), sizeof(uint32_t),
+        ownedPairHost->getArg(3), sizeof(int32_t));
+    auto* ownedTagOwnerDisjoint = ownedDisjoint(
+        ownedPairHost->getArg(2), sizeof(uint32_t),
+        ownedPairHost->getArg(4), sizeof(void*));
+    auto* ownedScalarOwnerDisjoint = ownedDisjoint(
+        ownedPairHost->getArg(3), sizeof(int32_t),
+        ownedPairHost->getArg(4), sizeof(void*));
+    auto* ownedOutputChecks = ownedPairBuilder.CreateAnd(
+        ownedOutputAligned,
+        ownedPairBuilder.CreateAnd(ownedTagScalarDisjoint,
+            ownedPairBuilder.CreateAnd(ownedTagOwnerDisjoint,
+                                       ownedScalarOwnerDisjoint)));
     auto* ownedPreflightBranch = ownedPairBuilder.CreateCondBr(
         ownedOutputChecks,
         ownedHostCheckOwner, ownedHostInvalidOutput);
@@ -5520,6 +5552,44 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         acceptedInvertedOwnerAlignment || acceptedMissingAlignment ||
         !verifyOwnedOutputAlignment())
         return fail("Native v3 host accepted altered output alignment guards");
+    const auto verifyOwnedOutputDisjointness = [&] {
+        return luna::codegen::verifyNativeOwnedResultHostOutputDisjointness(
+            ownedPairModule, ownedPairHost->getName().str(),
+            ownedSourceError);
+    };
+    if (!verifyOwnedOutputDisjointness())
+        return fail("Native v3 host lost its pairwise output guards");
+    auto* ownedTagScalarRightAddress = llvm::cast<llvm::PtrToIntInst>(
+        llvm::cast<llvm::ICmpInst>(
+            ownedTagScalarDisjoint->getCondition())->getOperand(1));
+    ownedTagScalarRightAddress->setOperand(0, ownedPairHost->getArg(4));
+    const bool acceptedWrongPair = verifyOwnedOutputDisjointness();
+    ownedTagScalarRightAddress->setOperand(0, ownedPairHost->getArg(3));
+    auto* ownedTagOwnerLeftGap = llvm::cast<llvm::ICmpInst>(
+        ownedTagOwnerDisjoint->getTrueValue());
+    ownedTagOwnerLeftGap->setOperand(1,
+        llvm::ConstantInt::get(ownedPairSize, 1));
+    const bool acceptedShortExtent = verifyOwnedOutputDisjointness();
+    ownedTagOwnerLeftGap->setOperand(1,
+        llvm::ConstantInt::get(ownedPairSize, sizeof(uint32_t)));
+    auto* ownedTagOwnerGap = llvm::cast<llvm::SelectInst>(
+        ownedTagOwnerLeftGap->getOperand(0));
+    auto* ownedForwardGap = ownedTagOwnerGap->getTrueValue();
+    ownedTagOwnerGap->setOperand(1, ownedTagOwnerGap->getFalseValue());
+    const bool acceptedReversedGap = verifyOwnedOutputDisjointness();
+    ownedTagOwnerGap->setOperand(1, ownedForwardGap);
+    ownedPreflightBranch->setCondition(ownedOutputAligned);
+    const bool acceptedMissingPairChecks = verifyOwnedOutputDisjointness();
+    ownedPreflightBranch->setCondition(ownedOutputChecks);
+    llvm::IRBuilder<> ownedPrematureBuilder(ownedPreflightBranch);
+    auto* ownedPrematureRead = ownedPrematureBuilder.CreateLoad(
+        ownedPairPtr, ownedPairHost->getArg(4));
+    const bool acceptedPrematureRead = verifyOwnedOutputDisjointness();
+    ownedPrematureRead->eraseFromParent();
+    if (acceptedWrongPair || acceptedShortExtent || acceptedReversedGap ||
+        acceptedMissingPairChecks || acceptedPrematureRead ||
+        !verifyOwnedOutputDisjointness())
+        return fail("Native v3 host accepted altered output disjointness");
     auto mutableOwnedError = std::find_if(
         tryApplyModule->typeTable.begin(), tryApplyModule->typeTable.end(),
         [&](const moon::TypeRecord& type) {

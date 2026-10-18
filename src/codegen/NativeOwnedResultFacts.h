@@ -124,4 +124,10 @@ bool verifyNativeOwnedResultHostOutputAlignment(
     const llvm::Module& generated, const std::string& hostLinkageName,
     std::string& error);
 
+// Proves all three output regions are pairwise disjoint on the entry success
+// edge, using their generated ABI sizes and unsigned address-gap checks.
+bool verifyNativeOwnedResultHostOutputDisjointness(
+    const llvm::Module& generated, const std::string& hostLinkageName,
+    std::string& error);
+
 } // namespace luna::codegen
