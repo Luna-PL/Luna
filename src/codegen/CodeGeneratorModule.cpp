@@ -2559,6 +2559,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 std::vector<std::string> expectedDropCalls;
                 std::vector<luna::codegen::NativeOwnedResultCleanupNode>
                     cleanupNodes;
+                std::vector<luna::codegen::NativeOwnedResultCleanupStep>
+                    cleanupSteps;
                 const auto collectDropCalls = [&](const auto& self,
                     const moon::TypeRecord* type, const TypePtr& resolved,
                     uint32_t parentIndex, uint64_t fieldOffset) -> bool {
@@ -2572,6 +2574,9 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     cleanupNodes.push_back({frozen->linkageName,
                         parentIndex, fieldOffset, typeSize(resolved),
                         typeAlignment(resolved)});
+                    cleanupSteps.push_back({
+                        luna::codegen::NativeOwnedResultCleanupStepKind::Drop,
+                        nodeIndex, 0, 0});
                     expectedDropCalls.push_back(frozen->linkageName);
                     for (size_t index = 0; index < type->fields.size(); ++index) {
                         const auto& field = type->fields[index];
@@ -2580,13 +2585,29 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                                 resolved->fields[index].type) != field.type)
                             return false;
                         const auto* nested = program.findType(field.type);
-                        if (nested && nested->kind == TypeKind::Struct &&
-                            !self(self, nested,
-                                resolved->fields[index].type, nodeIndex,
-                                luna::layout::productFieldOffset(
-                                    resolved, index)))
+                        if (!nested) return false;
+                        const auto offset = luna::layout::productFieldOffset(
+                            resolved, index);
+                        if (nested->kind == TypeKind::Struct) {
+                            cleanupSteps.push_back({
+                                luna::codegen::NativeOwnedResultCleanupStepKind::ReadOwner,
+                                nodeIndex, offset,
+                                static_cast<uint32_t>(cleanupNodes.size())});
+                            if (!self(self, nested,
+                                    resolved->fields[index].type,
+                                    nodeIndex, offset))
+                                return false;
+                        } else if (nested->kind == TypeKind::I32) {
+                            cleanupSteps.push_back({
+                                luna::codegen::NativeOwnedResultCleanupStepKind::ReadI32,
+                                nodeIndex, offset, 0});
+                        } else {
                             return false;
+                        }
                     }
+                    cleanupSteps.push_back({
+                        luna::codegen::NativeOwnedResultCleanupStepKind::Deallocate,
+                        nodeIndex, 0, 0});
                     expectedDropCalls.push_back("rt_dealloc");
                     return true;
                 };
@@ -2656,7 +2677,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     !luna::codegen::verifyNativeOwnedResultTransferClosedGraph(
                         *proof.mModule, transfer->getName().str(),
                         *privateOwnedResultFacts, expectedDropCalls,
-                        cleanupNodes,
+                        cleanupNodes, cleanupSteps,
                         {LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST,
                          LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST,
                          LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_RESOURCE_V1_TEST,

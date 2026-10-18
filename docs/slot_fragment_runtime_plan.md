@@ -1755,13 +1755,15 @@ It requires exactly 18 reachable blocks, one owner-cell load outside cleanup,
 four stores confined to the two success commits, the three expected preflight
 and body calls, the source-derived cleanup calls, ten returns, six branches
 and two status switches. Extra blocks, allocations, calls, memory effects and
-volatile or atomic accesses are rejected. Nested cleanup field reads remain
-allowed. A new owner-tree check binds each nested Drop argument to a pointer
-loaded from the source-derived offset in its parent owner, then requires the
-matching `rt_dealloc` on that same pointer with its physical size and
+volatile or atomic accesses are rejected. The owner-tree check binds each
+nested Drop argument to a pointer loaded from the source-derived offset in
+its parent owner, then requires the matching `rt_dealloc` on that same
+pointer with its physical size and
 alignment. It checks preorder Drop and postorder deallocation for the admitted
-three-node Struct tree. Exact coverage of other cleanup field reads and the
-generated transferred-Drop wrapper remain subsequent proof work.
+three-node Struct tree. A source-derived cleanup step list now checks every
+`i32` and nested-owner field read, including its offset, type and declaration
+order, and rejects extra instructions in the injected failure block. The
+generated transferred-Drop wrapper remains subsequent proof work.
 The producer-side host closed-graph check composes all of those branch and
 preflight verifiers. It requires exactly 18 reachable blocks, three entry
 scratch allocations, four non-volatile loads, four stores to the checked

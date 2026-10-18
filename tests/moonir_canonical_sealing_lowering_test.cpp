@@ -6364,12 +6364,17 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_HANDLE_V1_TEST,
         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST,
         LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST};
+    const std::vector<luna::codegen::NativeOwnedResultCleanupStep>
+        rootCleanupSteps = {
+            {luna::codegen::NativeOwnedResultCleanupStepKind::Drop, 0, 0, 0},
+            {luna::codegen::NativeOwnedResultCleanupStepKind::Deallocate,
+                0, 0, 0}};
     const auto verifyTransferGraph = [&] {
         return luna::codegen::verifyNativeOwnedResultTransferClosedGraph(
             ownedPairModule, ownedCleanupTransfer->getName().str(),
             ownedCleanupFacts, ownedCleanupCalls,
             {{ownedCleanupDrop->getName().str(), 0, 0, 4, 4}},
-            transferStatuses, ownedSourceError);
+            rootCleanupSteps, transferStatuses, ownedSourceError);
     };
     if (!verifyTransferGraph())
         return fail("Native v3 transfer lost its closed status graph");
@@ -6395,6 +6400,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         llvm::Function::ExternalLinkage,
         "luna_native_nested_cleanup_drop", ownedPairModule);
     llvm::IRBuilder<> nestedCleanupBuilder(ownedCleanupDeallocCall);
+    auto* rootMarkerLoad = nestedCleanupBuilder.CreateLoad(
+        ownedPairI32, ownedCleanupOwner);
     auto* nestedFieldAddress = llvm::cast<llvm::GetElementPtrInst>(
         nestedCleanupBuilder.CreateGEP(
             llvm::Type::getInt8Ty(ownedPairContext), ownedCleanupOwner,
@@ -6418,10 +6425,23 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         nestedCleanupNodes = {
             {ownedCleanupDrop->getName().str(), 0, 0, 16, 8},
             {nestedCleanupDrop->getName().str(), 0, 8, 4, 4}};
+    const std::vector<luna::codegen::NativeOwnedResultCleanupStep>
+        nestedCleanupSteps = {
+            {luna::codegen::NativeOwnedResultCleanupStepKind::Drop, 0, 0, 0},
+            {luna::codegen::NativeOwnedResultCleanupStepKind::ReadI32,
+                0, 0, 0},
+            {luna::codegen::NativeOwnedResultCleanupStepKind::ReadOwner,
+                0, 8, 1},
+            {luna::codegen::NativeOwnedResultCleanupStepKind::Drop, 1, 0, 0},
+            {luna::codegen::NativeOwnedResultCleanupStepKind::Deallocate,
+                1, 0, 0},
+            {luna::codegen::NativeOwnedResultCleanupStepKind::Deallocate,
+                0, 0, 0}};
     const auto verifyNestedCleanup = [&] {
         return luna::codegen::verifyNativeOwnedResultTransferCleanupProvenance(
             ownedPairModule, ownedCleanupTransfer->getName().str(),
             ownedCleanupFacts, nestedCleanupCalls, nestedCleanupNodes,
+            nestedCleanupSteps,
             LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_RESOURCE_V1_TEST,
             LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST,
             ownedSourceError);
@@ -6430,7 +6450,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         return luna::codegen::verifyNativeOwnedResultTransferClosedGraph(
             ownedPairModule, ownedCleanupTransfer->getName().str(),
             ownedCleanupFacts, nestedCleanupCalls, nestedCleanupNodes,
-            transferStatuses, ownedSourceError);
+            nestedCleanupSteps, transferStatuses, ownedSourceError);
     };
     if (!verifyNestedCleanup() || !verifyNestedTransferGraph())
         return fail("Native v3 transfer lost nested cleanup provenance");
@@ -6456,9 +6476,18 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     nestedDropCall->setCallingConv(llvm::CallingConv::Fast);
     const bool acceptedWrongNestedDropConvention = verifyNestedCleanup();
     nestedDropCall->setCallingConv(llvm::CallingConv::C);
+    rootMarkerLoad->setOperand(0, ownedCleanupTransfer->getArg(4));
+    const bool acceptedWrongMarkerField = verifyNestedCleanup();
+    rootMarkerLoad->setOperand(0, ownedCleanupOwner);
+    llvm::IRBuilder<> extraCleanupReadBuilder(ownedCleanupDeallocCall);
+    auto* extraCleanupRead = extraCleanupReadBuilder.CreateLoad(
+        ownedPairI32, ownedCleanupOwner);
+    const bool acceptedExtraCleanupRead = verifyNestedCleanup();
+    extraCleanupRead->eraseFromParent();
     if (acceptedParentAsNestedDrop || acceptedParentAsNestedDealloc ||
         acceptedWrongNestedOffset || acceptedOutputAsNestedField ||
         acceptedWrongNestedSize || acceptedWrongNestedDropConvention ||
+        acceptedWrongMarkerField || acceptedExtraCleanupRead ||
         !verifyNestedCleanup() ||
         !verifyNestedTransferGraph())
         return fail("Native v3 transfer accepted altered nested cleanup");
@@ -6466,6 +6495,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     nestedDropCall->eraseFromParent();
     nestedOwnerLoad->eraseFromParent();
     nestedFieldAddress->eraseFromParent();
+    rootMarkerLoad->eraseFromParent();
     nestedCleanupDrop->eraseFromParent();
     ownedCleanupDeallocCall->setArgOperand(1,
         llvm::ConstantInt::get(ownedPairSize, 4));

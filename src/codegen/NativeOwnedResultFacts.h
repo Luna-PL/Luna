@@ -177,13 +177,29 @@ struct NativeOwnedResultCleanupNode {
     uint64_t allocationAlignment;
 };
 
+enum class NativeOwnedResultCleanupStepKind : uint8_t {
+    Drop,
+    ReadI32,
+    ReadOwner,
+    Deallocate,
+};
+
+struct NativeOwnedResultCleanupStep {
+    NativeOwnedResultCleanupStepKind kind;
+    uint32_t ownerIndex;
+    uint64_t fieldOffset;
+    uint32_t childIndex;
+};
+
 // Binds every nested Drop and deallocation to a pointer loaded from the
-// source-derived field offset of its parent owner.
+// source-derived field offset of its parent owner, and audits all admitted
+// field reads in declaration order.
 bool verifyNativeOwnedResultTransferCleanupProvenance(
     const llvm::Module& generated, const std::string& transferLinkageName,
     const NativeOwnedResultSourceFacts& source,
     const std::vector<std::string>& expectedCleanupCalls,
     const std::vector<NativeOwnedResultCleanupNode>& cleanupNodes,
+    const std::vector<NativeOwnedResultCleanupStep>& cleanupSteps,
     uint32_t invalidResourceStatus, uint32_t injectedFailureStatus,
     std::string& error);
 
@@ -237,6 +253,7 @@ bool verifyNativeOwnedResultTransferClosedGraph(
     const NativeOwnedResultSourceFacts& source,
     const std::vector<std::string>& expectedCleanupCalls,
     const std::vector<NativeOwnedResultCleanupNode>& cleanupNodes,
+    const std::vector<NativeOwnedResultCleanupStep>& cleanupSteps,
     const NativeOwnedResultTransferStatuses& statuses,
     std::string& error);
 

@@ -1438,6 +1438,7 @@ bool verifyNativeOwnedResultTransferCleanupProvenance(
     const NativeOwnedResultSourceFacts& source,
     const std::vector<std::string>& expectedCleanupCalls,
     const std::vector<NativeOwnedResultCleanupNode>& cleanupNodes,
+    const std::vector<NativeOwnedResultCleanupStep>& cleanupSteps,
     uint32_t invalidResourceStatus, uint32_t injectedFailureStatus,
     std::string& error) {
     const auto reject = [&](const char* reason) {
@@ -1446,6 +1447,8 @@ bool verifyNativeOwnedResultTransferCleanupProvenance(
     };
     if (cleanupNodes.empty() || cleanupNodes.size() > 3 ||
         expectedCleanupCalls.size() != cleanupNodes.size() * 2 ||
+        cleanupSteps.size() < cleanupNodes.size() * 2 ||
+        cleanupSteps.size() > 15 ||
         cleanupNodes.front().parentIndex != 0 ||
         cleanupNodes.front().fieldOffset != 0)
         return reject("Native v3 transfer cleanup lacks a bounded owner tree");
@@ -1578,6 +1581,90 @@ bool verifyNativeOwnedResultTransferCleanupProvenance(
     }
     if (nextNode != cleanupNodes.size() || !active.empty())
         return reject("Native v3 transfer cleanup left an owner unaccounted");
+    std::vector<size_t> expectedActive;
+    size_t expectedNode = 0;
+    auto instruction = cleanup->begin();
+    for (const auto& step : cleanupSteps) {
+        if (instruction == cleanup->end() ||
+            step.ownerIndex >= cleanupNodes.size())
+            return reject("Native v3 transfer cleanup changed its field-read plan");
+        const auto& node = cleanupNodes[step.ownerIndex];
+        if (step.kind == NativeOwnedResultCleanupStepKind::Drop) {
+            const auto* call = llvm::dyn_cast<llvm::CallInst>(&*instruction++);
+            if (step.ownerIndex != expectedNode++ ||
+                (step.ownerIndex == 0
+                    ? !expectedActive.empty()
+                    : expectedActive.empty() ||
+                        node.parentIndex != expectedActive.back()) ||
+                !call || !call->getCalledFunction() ||
+                call->getCalledFunction()->getName() != node.dropLinkageName ||
+                call->arg_size() != 1 ||
+                call->getArgOperand(0) != owners[step.ownerIndex])
+                return reject("Native v3 transfer cleanup changed a planned Drop");
+            expectedActive.push_back(step.ownerIndex);
+        } else if (step.kind ==
+                   NativeOwnedResultCleanupStepKind::Deallocate) {
+            const auto* call = llvm::dyn_cast<llvm::CallInst>(&*instruction++);
+            if (expectedActive.empty() ||
+                expectedActive.back() != step.ownerIndex ||
+                !call || !call->getCalledFunction() ||
+                call->getCalledFunction()->getName() != "rt_dealloc" ||
+                call->arg_size() != 3 ||
+                call->getArgOperand(0) != owners[step.ownerIndex])
+                return reject("Native v3 transfer cleanup changed a planned deallocation");
+            expectedActive.pop_back();
+        } else {
+            if ((step.kind != NativeOwnedResultCleanupStepKind::ReadI32 &&
+                 step.kind != NativeOwnedResultCleanupStepKind::ReadOwner) ||
+                expectedActive.empty() ||
+                expectedActive.back() != step.ownerIndex)
+                return reject("Native v3 transfer cleanup changed field order");
+            const bool ownerField = step.kind ==
+                NativeOwnedResultCleanupStepKind::ReadOwner;
+            const auto fieldSize = ownerField ? sizeof(void*) : sizeof(int32_t);
+            const auto fieldAlignment = ownerField
+                ? alignof(void*) : alignof(int32_t);
+            if (node.allocationSize < fieldSize ||
+                step.fieldOffset > node.allocationSize - fieldSize ||
+                step.fieldOffset % fieldAlignment != 0 ||
+                (ownerField
+                    ? step.childIndex != expectedNode ||
+                        step.childIndex >= cleanupNodes.size() ||
+                        cleanupNodes[step.childIndex].parentIndex !=
+                            step.ownerIndex
+                    : step.childIndex != 0))
+                return reject("Native v3 transfer cleanup changed field layout");
+            const llvm::Value* address = owners[step.ownerIndex];
+            if (step.fieldOffset != 0) {
+                const auto* gep = llvm::dyn_cast<llvm::GetElementPtrInst>(
+                    &*instruction++);
+                const auto* offset = gep && gep->getNumIndices() == 1
+                    ? llvm::dyn_cast<llvm::ConstantInt>(gep->getOperand(1))
+                    : nullptr;
+                if (!gep || !gep->getSourceElementType()->isIntegerTy(8) ||
+                    gep->getPointerOperand() != address || !offset ||
+                    offset->getBitWidth() != sizeof(void*) * 8 ||
+                    offset->getZExtValue() != step.fieldOffset)
+                    return reject("Native v3 transfer cleanup changed a field address");
+                address = gep;
+            }
+            if (instruction == cleanup->end())
+                return reject("Native v3 transfer cleanup lost a field read");
+            const auto* load = llvm::dyn_cast<llvm::LoadInst>(
+                &*instruction++);
+            if (!load || load->getPointerOperand() != address ||
+                (ownerField ? !load->getType()->isPointerTy()
+                            : !load->getType()->isIntegerTy(32)) ||
+                load->isVolatile() || load->isAtomic() ||
+                (ownerField && owners[step.childIndex] != load))
+                return reject("Native v3 transfer cleanup changed a field read");
+        }
+    }
+    if (expectedNode != cleanupNodes.size() || !expectedActive.empty() ||
+        instruction == cleanup->end() ||
+        !llvm::isa<llvm::ReturnInst>(&*instruction++) ||
+        instruction != cleanup->end())
+        return reject("Native v3 transfer cleanup added an unplanned instruction");
     error.clear();
     return true;
 }
@@ -2098,11 +2185,12 @@ bool verifyNativeOwnedResultTransferClosedGraph(
     const NativeOwnedResultSourceFacts& source,
     const std::vector<std::string>& expectedCleanupCalls,
     const std::vector<NativeOwnedResultCleanupNode>& cleanupNodes,
+    const std::vector<NativeOwnedResultCleanupStep>& cleanupSteps,
     const NativeOwnedResultTransferStatuses& statuses,
     std::string& error) {
     if (!verifyNativeOwnedResultTransferCleanupProvenance(
             generated, transferLinkageName, source, expectedCleanupCalls,
-            cleanupNodes,
+            cleanupNodes, cleanupSteps,
             statuses.invalidResource, statuses.injectedFailure,
             error) ||
         !verifyNativeOwnedResultTransferScalarFork(
