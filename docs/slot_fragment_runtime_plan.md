@@ -1709,6 +1709,12 @@ generated call. Canonical JIT regressions cover empty context/handle, wrong
 target, invalid output priority, scalar success and owned Err handoff. The
 raw-pointer test entry remains for direct generated-wrapper probes; neither
 entry publishes a v3 descriptor or a public carrier ABI.
+The dispatching scalar arm now makes the Fragment callback release the
+caller's sole Ref handle before `resume`. The callback still sees a live
+generation through the typed call's temporary pin; the call succeeds, and
+the generation lease expires after return. Owned Err cleanup remains a
+separate pre-dispatch return proof, so this does not establish an owned
+return after callback release.
 Runtime now also has an internal C adoption entry that takes a returned owner,
 generated Drop pointer, Runtime-issued live code-lease token and stable empty
 owner cell. The token is resolved in Runtime's live table without dereferencing

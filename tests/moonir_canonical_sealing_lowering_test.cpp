@@ -91,6 +91,11 @@ std::array<const char*, 2> privateRefJitExpectedSlotContracts{};
 std::array<const char*, 2> privateRefJitExpectedLayoutIds{};
 std::array<uint64_t, 2> privateRefJitExpectedSizes{};
 std::array<uint64_t, 2> privateRefJitExpectedAlignments{};
+luna::runtime::RuntimeFragmentRefHandle*
+    privateRefJitCallerHandleToRelease = nullptr;
+bool privateRefJitCallerHandleReleased = false;
+std::weak_ptr<int>* privateRefJitLeaseToObserve = nullptr;
+bool privateRefJitLeaseLiveAfterCallerRelease = false;
 
 void executePrivateRefJitFragmentFrom(unsigned source, void* activation) {
     ++privateRefJitExecutions;
@@ -112,6 +117,15 @@ void executePrivateRefJitFragmentFrom(unsigned source, void* activation) {
     std::memcpy(&value, packed, sizeof(value));
     privateRefJitObservedArguments.push_back(value);
     privateRefJitObservedSources.push_back(source);
+    if (privateRefJitCallerHandleToRelease) {
+        auto* caller = privateRefJitCallerHandleToRelease;
+        privateRefJitCallerHandleToRelease = nullptr;
+        caller->reset();
+        privateRefJitCallerHandleReleased = true;
+        if (privateRefJitLeaseToObserve)
+            privateRefJitLeaseLiveAfterCallerRelease =
+                !privateRefJitLeaseToObserve->expired();
+    }
     privateRefJitResumeStatus =
         luna_runtime_fragment_activation_resume_v1(activation);
     if (privateRefJitResumeStatus ==
@@ -722,6 +736,24 @@ bool exercisePrivateRefApplyJit(
                 luna::runtime::RuntimeOwnedResultHandle returnedOwner;
                 luna::runtime::RuntimeFragmentExecutionContext missingParent;
                 luna::runtime::RuntimeFragmentRefHandle missingReference;
+                const auto callTypedWithCallbackRelease =
+                    [&](bool failAdoption) -> int32_t {
+                        luna::runtime::RuntimeFragmentRefHandle callerShell;
+                        if (!luna::runtime::pinRuntimeFragmentRefHandle(
+                                handle, callerShell, error))
+                            return LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST;
+                        privateRefJitCallerHandleReleased = false;
+                        privateRefJitCallerHandleToRelease =
+                            expectedDispatches ? &callerShell : nullptr;
+                        const auto status = loadedResult->call(
+                            parent, callerShell, &tag, &scalar,
+                            returnedOwner, failAdoption);
+                        privateRefJitCallerHandleToRelease = nullptr;
+                        if (expectedDispatches &&
+                            (!privateRefJitCallerHandleReleased || callerShell))
+                            return LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST;
+                        return status;
+                    };
                 if (loadedResult->call(parent.opaque(), handle.opaque(),
                         nullptr, &scalar, returnedOwner) !=
                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST ||
@@ -759,8 +791,7 @@ bool exercisePrivateRefApplyJit(
                     return false;
                 }
                 if (expectedResult->first) {
-                    if (loadedResult->call(parent, handle,
-                            &tag, &scalar, returnedOwner, true) !=
+                    if (callTypedWithCallbackRelease(true) !=
                             LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST ||
                         tag != 1 || scalar != expectedResult->second ||
                         returnedOwner || returnedOwner.cell() != nullptr ||
@@ -787,8 +818,7 @@ bool exercisePrivateRefApplyJit(
                 }
                 const auto callsAfterAdoptionFailure =
                     privateRefJitAllDropProbeCalls;
-                if (loadedResult->call(parent, handle,
-                        &tag, &scalar, returnedOwner) !=
+                if (callTypedWithCallbackRelease(false) !=
                         LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST ||
                     tag != static_cast<uint32_t>(expectedResult->first) ||
                     scalar != unchangedScalar || !returnedOwner ||
@@ -1221,6 +1251,31 @@ bool exercisePrivateRefApplyJit(
         return false;
     }
     if (!invoke()) return false;
+    const bool probeTypedResultRelease =
+        exerciseLoadedResult && expectedResult && expectedResult->first &&
+        expectedDispatches != 0 && !needsSecondHandle;
+    if (probeTypedResultRelease) {
+        uint32_t releasedTag = 42;
+        int32_t releasedScalar = 0x12345678;
+        luna::runtime::RuntimeOwnedResultHandle releasedOwner;
+        privateRefJitCallerHandleReleased = false;
+        privateRefJitLeaseLiveAfterCallerRelease = false;
+        privateRefJitCallerHandleToRelease = &handle;
+        privateRefJitLeaseToObserve = &generationLease;
+        const auto releasedStatus = loadedResult->call(
+            parent, handle, &releasedTag, &releasedScalar, releasedOwner);
+        privateRefJitCallerHandleToRelease = nullptr;
+        privateRefJitLeaseToObserve = nullptr;
+        if (releasedStatus !=
+                LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST ||
+            !privateRefJitCallerHandleReleased ||
+            !privateRefJitLeaseLiveAfterCallerRelease || handle ||
+            !generationLease.expired() || releasedTag != 1 ||
+            releasedScalar != expectedResult->second || releasedOwner) {
+            error = "private typed Result call lost its Ref pin during callback release";
+            return false;
+        }
+    }
     luna::runtime::RuntimeFragmentRefHandle callPin;
     luna::runtime::RuntimeFragmentExecutionContext parentPin;
     if (exerciseIngressGate) {
@@ -1283,7 +1338,9 @@ bool exercisePrivateRefApplyJit(
             return false;
         }
     }
-    const unsigned expectedCalls = exerciseIngressGate ? 5u : 2u;
+    const unsigned expectedCalls =
+        (exerciseIngressGate ? 5u : 2u) +
+        (probeTypedResultRelease ? 1u : 0u);
     if (privateRefJitExecutions != before + expectedDispatches * expectedCalls ||
         privateRefJitCompletedResumes !=
             resumesBefore + expectedCompletedDispatches.value_or(
