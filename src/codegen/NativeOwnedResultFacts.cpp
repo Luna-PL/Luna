@@ -10,6 +10,7 @@
 #include "runtime/RuntimeFragmentCompilerBridge.h"
 #include "runtime/RuntimeOwnedResult.h"
 
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/IR/CFG.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/GlobalVariable.h>
@@ -902,6 +903,114 @@ bool verifyNativeOwnedResultHostResourceValidation(
         if (predecessor != resource && predecessor != invalidCheck &&
             predecessor != invalidDrop)
             return reject("Native v3 host invalid result has another ingress");
+    error.clear();
+    return true;
+}
+
+bool verifyNativeOwnedResultHostClosedGraph(
+    const llvm::Module& generated, const std::string& hostLinkageName,
+    const std::string& transferLinkageName,
+    const std::string& dropLinkageName, std::string& error) {
+    if (!verifyNativeOwnedResultHostResourceValidation(
+            generated, hostLinkageName, transferLinkageName,
+            dropLinkageName, error) ||
+        !verifyNativeOwnedResultHostOwnerLeaseGates(
+            generated, hostLinkageName, transferLinkageName, error) ||
+        !verifyNativeOwnedResultHostOutputDisjointness(
+            generated, hostLinkageName, error))
+        return false;
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    const auto* host = generated.getFunction(hostLinkageName);
+    const auto* transfer = generated.getFunction(transferLinkageName);
+    const auto* drop = generated.getFunction(dropLinkageName);
+    const auto* adoption = generated.getFunction(
+        "luna_runtime_owned_result_adopt_v1");
+    const auto* lease = generated.getFunction(
+        "luna_runtime_owned_result_lease_check_v1");
+    const llvm::CallInst* transferCall = nullptr;
+    for (const auto& block : *host)
+        for (const auto& instruction : block)
+            if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                    &instruction); call && call->getCalledFunction() == transfer)
+                transferCall = call;
+    const std::array<const llvm::Value*, 3> scratch = {
+        transferCall->getArgOperand(2), transferCall->getArgOperand(3),
+        transferCall->getArgOperand(4)};
+    if (host->size() != 18)
+        return reject("Native v3 host graph changed its block count");
+    llvm::SmallPtrSet<const llvm::BasicBlock*, 32> reached;
+    std::vector<const llvm::BasicBlock*> pending = {&host->getEntryBlock()};
+    reached.insert(pending.front());
+    while (!pending.empty()) {
+        const auto* block = pending.back();
+        pending.pop_back();
+        for (const auto* successor : llvm::successors(block))
+            if (reached.insert(successor).second)
+                pending.push_back(successor);
+    }
+    if (reached.size() != host->size())
+        return reject("Native v3 host graph has an unreachable block");
+    unsigned allocas = 0;
+    unsigned loads = 0;
+    unsigned ownerInitializations = 0;
+    unsigned scalarStores = 0;
+    unsigned tagStores = 0;
+    unsigned leaseCalls = 0;
+    unsigned transferCalls = 0;
+    unsigned adoptCalls = 0;
+    unsigned dropCalls = 0;
+    unsigned returns = 0;
+    unsigned branches = 0;
+    for (const auto& block : *host)
+        for (const auto& instruction : block) {
+            if (const auto* allocated = llvm::dyn_cast<llvm::AllocaInst>(
+                    &instruction)) {
+                const auto* size = llvm::dyn_cast<llvm::ConstantInt>(
+                    allocated->getArraySize());
+                if (allocated->getParent() != &host->getEntryBlock() ||
+                    std::find(scratch.begin(), scratch.end(), allocated) ==
+                        scratch.end() ||
+                    !size || !size->isOne())
+                    return reject("Native v3 host graph changed its scratch allocation");
+                ++allocas;
+            } else if (const auto* loaded = llvm::dyn_cast<llvm::LoadInst>(
+                           &instruction)) {
+                if (loaded->isVolatile() || loaded->isAtomic())
+                    return reject("Native v3 host graph added a volatile or atomic load");
+                ++loads;
+            } else if (const auto* stored = llvm::dyn_cast<llvm::StoreInst>(
+                           &instruction)) {
+                if (stored->isVolatile() || stored->isAtomic())
+                    return reject("Native v3 host graph added a volatile or atomic store");
+                const auto* destination = stored->getPointerOperand();
+                if (destination == scratch[2]) ++ownerInitializations;
+                else if (destination == host->getArg(3)) ++scalarStores;
+                else if (destination == host->getArg(2)) ++tagStores;
+                else return reject("Native v3 host graph added an output store");
+            } else if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                           &instruction)) {
+                const auto* callee = call->getCalledFunction();
+                if (callee == lease) ++leaseCalls;
+                else if (callee == transfer) ++transferCalls;
+                else if (callee == adoption) ++adoptCalls;
+                else if (callee == drop) ++dropCalls;
+                else return reject("Native v3 host graph added an unrecognized call");
+            } else if (llvm::isa<llvm::ReturnInst>(&instruction)) {
+                ++returns;
+            } else if (llvm::isa<llvm::BranchInst>(&instruction)) {
+                ++branches;
+            } else if (instruction.mayHaveSideEffects()) {
+                return reject("Native v3 host graph added a side effect");
+            }
+        }
+    if (allocas != 3 || loads != 4 || ownerInitializations != 1 ||
+        scalarStores != 1 || tagStores != 2 || leaseCalls != 1 ||
+        transferCalls != 1 || adoptCalls != 1 || dropCalls != 2 ||
+        returns != 7 || branches != 11)
+        return reject("Native v3 host graph changed its effects or exits");
     error.clear();
     return true;
 }

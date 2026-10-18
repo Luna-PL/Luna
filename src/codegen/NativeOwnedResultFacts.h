@@ -120,6 +120,14 @@ bool verifyNativeOwnedResultHostResourceValidation(
     const std::string& transferLinkageName,
     const std::string& dropLinkageName, std::string& error);
 
+// Composes the host branch verifiers and closes the generated control-flow
+// graph: every block is reachable, and scratch cells, calls, memory effects
+// and returns match the checked status paths.
+bool verifyNativeOwnedResultHostClosedGraph(
+    const llvm::Module& generated, const std::string& hostLinkageName,
+    const std::string& transferLinkageName,
+    const std::string& dropLinkageName, std::string& error);
+
 // Proves that transfer is reachable only through the caller owner-cell-empty
 // check and the Runtime code-lease-live check. Both failed gates return their
 // versioned status. The preceding output validity expression is separate.

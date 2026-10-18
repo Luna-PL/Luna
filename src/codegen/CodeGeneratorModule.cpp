@@ -2903,38 +2903,10 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                         failure = "private Ref Result host transfer lost its commit or cleanup path";
                         return false;
                     }
-                    if (!luna::codegen::verifyNativeOwnedResultHostAdoption(
-                            *proof.mModule, hostEntry->getName().str(),
-                            dropEntry->getName().str(), failure))
-                        return false;
-                    if (!luna::codegen::verifyNativeOwnedResultHostTransferFork(
-                            *proof.mModule, hostEntry->getName().str(),
-                            transfer->getName().str(), failure))
-                        return false;
-                    if (!luna::codegen::verifyNativeOwnedResultHostScalarCommit(
-                            *proof.mModule, hostEntry->getName().str(),
-                            transfer->getName().str(), failure))
-                        return false;
-                    if (!luna::codegen::verifyNativeOwnedResultHostResourceValidation(
+                    if (!luna::codegen::verifyNativeOwnedResultHostClosedGraph(
                             *proof.mModule, hostEntry->getName().str(),
                             transfer->getName().str(),
                             dropEntry->getName().str(), failure))
-                        return false;
-                    if (!luna::codegen::verifyNativeOwnedResultHostOwnerLeaseGates(
-                            *proof.mModule, hostEntry->getName().str(),
-                            transfer->getName().str(), failure))
-                        return false;
-                    if (!luna::codegen::verifyNativeOwnedResultHostOutputNonNull(
-                            *proof.mModule, hostEntry->getName().str(),
-                            failure))
-                        return false;
-                    if (!luna::codegen::verifyNativeOwnedResultHostOutputAlignment(
-                            *proof.mModule, hostEntry->getName().str(),
-                            failure))
-                        return false;
-                    if (!luna::codegen::verifyNativeOwnedResultHostOutputDisjointness(
-                            *proof.mModule, hostEntry->getName().str(),
-                            failure))
                         return false;
                     // The candidate callable profile has no test injection
                     // argument. Its one call fixes that argument to zero.

@@ -5765,6 +5765,35 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         acceptedMissingPairChecks || acceptedPrematureRead ||
         !verifyOwnedOutputDisjointness())
         return fail("Native v3 host accepted altered output disjointness");
+    const auto verifyOwnedClosedGraph = [&] {
+        return luna::codegen::verifyNativeOwnedResultHostClosedGraph(
+            ownedPairModule, ownedPairHost->getName().str(),
+            ownedPairTransfer->getName().str(),
+            ownedPairDrop->getName().str(), ownedSourceError);
+    };
+    if (!verifyOwnedClosedGraph())
+        return fail((std::string("Native v3 host graph is not closed: ") +
+                    ownedSourceError).c_str());
+    llvm::IRBuilder<> ownedExtraBuilder(ownedPreflightBranch);
+    auto* ownedExtraScratch = ownedExtraBuilder.CreateAlloca(ownedPairI32);
+    const bool acceptedExtraScratch = verifyOwnedClosedGraph();
+    ownedExtraScratch->eraseFromParent();
+    auto* ownedUnreachableBlock = llvm::BasicBlock::Create(
+        ownedPairContext, "unreachable.extra", ownedPairHost);
+    llvm::IRBuilder<> ownedUnreachableBuilder(ownedUnreachableBlock);
+    ownedUnreachableBuilder.CreateRet(llvm::ConstantInt::get(ownedPairI32, 0));
+    const bool acceptedUnreachableBlock = verifyOwnedClosedGraph();
+    ownedUnreachableBlock->eraseFromParent();
+    ownedOwnerOutLoad->setVolatile(true);
+    const bool acceptedVolatileOwnerLoad = verifyOwnedClosedGraph();
+    ownedOwnerOutLoad->setVolatile(false);
+    ownedHostInit->setVolatile(true);
+    const bool acceptedVolatileScratchStore = verifyOwnedClosedGraph();
+    ownedHostInit->setVolatile(false);
+    if (acceptedExtraScratch || acceptedUnreachableBlock ||
+        acceptedVolatileOwnerLoad || acceptedVolatileScratchStore ||
+        !verifyOwnedClosedGraph())
+        return fail("Native v3 host accepted an extra block or side effect");
     auto* ownedCleanupValue = llvm::StructType::get(
         ownedPairContext, std::vector<llvm::Type*>{ownedPairSize});
     auto* ownedCleanupResult = llvm::StructType::get(

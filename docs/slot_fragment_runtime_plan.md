@@ -1687,8 +1687,8 @@ the loaded owner, exact generated Drop entry, lease and caller's owner cell.
 Only its successful status reaches the identified final tag-store block; the
 failure edge drops that same local owner cell and returns status `8`. The
 private JIT path runs this check and rejects altered lease, branch, Drop,
-failure status or tag destination. Complete transfer-body failure cleanup and the full
-host status graph still need independent production proof.
+failure status or tag destination. The full host status graph is checked
+below; complete transfer-body failure cleanup remains independent proof work.
 The producer-side transfer-fork check also requires one call with the original
 parent and Ref, distinct local tag/scalar/owner scratch cells, a null-initialized
 owner cell and zero test injection. Its failure edge returns the transfer
@@ -1699,8 +1699,7 @@ it loads the tag and owner from the transfer scratch cells, dispatches tag
 a null owner. That commit loads the same scalar scratch, writes the caller's
 scalar and tag cells in order, and returns status `0`. Mutation probes reject
 changed dispatch, owner gate, scratch, output destination and status. The
-invalid-resource continuation is checked below; the full host status graph
-remains separate proof work.
+invalid-resource continuation and host graph closure are checked below.
 The host resource-validation check now binds the tag `0` arm to a non-null
 owner test, the zero-injection gate and the exact adoption call. Its success
 tag comes from the transfer scratch. A null resource owner returns status
@@ -1709,7 +1708,7 @@ generated Drop on that same local owner cell, then returns status `2`.
 The shared invalid-status block has only those three expected predecessors
 and writes no caller output. Mutation probes cover the owner gates, adoption
 ingress, Drop cell, tag source and status. Other host control-flow properties
-still require separate proof.
+are composed by the closure check below.
 Output preflight is checked separately below; cleanup inside the transfer body
 remains unproved by these host checks.
 The producer-side owner/lease gate check now binds the caller owner-cell load
@@ -1747,7 +1746,15 @@ check. All three outputs must be non-null, ABI-aligned and pairwise disjoint
 before any memory access. Only then may it load the owner cell; an occupied
 cell or invalid output returns status `1` without writing outputs. The
 context check has that empty-cell edge as its sole predecessor. The full host
-status graph remains separate proof work.
+graph is closed by the following check.
+The producer-side host closed-graph check composes all of those branch and
+preflight verifiers. It requires exactly 18 reachable blocks, three entry
+scratch allocations, four non-volatile loads, four stores to the checked
+scratch and caller output cells, five recognized calls, and seven return
+paths. It rejects extra blocks, scratch cells, calls, memory effects and
+volatile or atomic accesses. This bounds the generated private host wrapper's
+control flow and direct output writes; it does not prove the transfer body's
+complete cleanup, Runtime call behavior or an artifact proof claim.
 
 The private generated transfer entry now consumes those source facts for the
 candidate owned-error shape and checks its emitted C calling convention,
