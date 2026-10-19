@@ -79,6 +79,52 @@ bool matchesPrivateRefContextEffect(
 }
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
+// A failed dispatch may be reported after its continuation has run. Admit an
+// owned Result status clone only when the outlined continuation cannot write
+// an owner into the inherited return cell or leave a live local behind.
+bool privateOwnedResultStatusCandidate(
+    const moon::Module& program, const FunctionDecl& function) {
+    const auto* graph = function.controlFlow.get();
+    if (!graph || graph->runtimeRefApplies.size() != 1) return false;
+    moon::Verifier verifier;
+    if (!verifier.verify(*graph, program)) return false;
+    std::string flowError;
+    const auto flow = moon::planRuntimeRefApplyFlow(*graph, flowError);
+    if (!flow) return false;
+    size_t slotCount = 0;
+    for (const auto& block : graph->blocks) {
+        bool outlined = false;
+        for (auto regionId = block.region; !regionId.empty();) {
+            const auto* region = graph->findRegion(regionId);
+            if (!region) return false;
+            if (region->kind == moon::RegionKind::Continuation) {
+                outlined = true;
+                break;
+            }
+            regionId = region->parent;
+        }
+        if (outlined && (!block.operations.empty() ||
+                         block.terminator.kind != moon::TerminatorKind::Jump ||
+                         !block.terminator.primary.cleanups.empty()))
+            return false;
+        if (block.terminator.kind == moon::TerminatorKind::RuntimeSlot) {
+            ++slotCount;
+            const auto* active = verifier.activeCleanupsBeforeEdge(block.id);
+            if (outlined || !active || !active->empty()) return false;
+        }
+    }
+    if (slotCount != 1) return false;
+    for (const auto& edge : flow->edges)
+        if (!edge.enters.empty()) {
+            const auto* source = graph->findBlock(edge.source);
+            const auto* active = verifier.activeCleanupsBeforeEdge(edge.source);
+            if (!source || source->terminator.kind !=
+                    moon::TerminatorKind::Jump || !active || !active->empty())
+                return false;
+        }
+    return true;
+}
+
 // The unit Apply JIT ingress is a candidate for a typed host entry. Resolve
 // its identity from frozen records instead of inferring a callable ABI from
 // the wrapper's raw address. This does not publish or serialize the entry.
@@ -2083,10 +2129,13 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         std::string invalidIR;
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
         if (executable) {
-            if (privateScalarResultJit && function.params.size() == 1) {
-                // Recoverable failure is admitted only for scalar Results.
-                // Owned Results can have a live local owner when derivation or
-                // dispatch fails; their failure cleanup still needs proof.
+            if (function.params.size() == 1 &&
+                (privateScalarResultJit ||
+                 (privateErrResourceResultJit &&
+                  privateOwnedResultStatusCandidate(program, function)))) {
+                // A bounded owned Result may use this test-only clone when no
+                // owner is live at failure sites and its outline cannot
+                // construct or return one before dispatch reports failure.
                 // A trailing cell separates failure from the Result tag.
                 std::vector<llvm::Type*> statusParameters(
                     body->getFunctionType()->params().begin(),

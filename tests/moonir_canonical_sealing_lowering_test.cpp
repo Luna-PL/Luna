@@ -317,7 +317,7 @@ bool exercisePrivateRefApplyJit(
         (exerciseLoadedResult && (!transferredDropCalls ||
                                   !expectedResult || twoBorrowedReferences)) ||
         (exerciseStatusDispatchFailure &&
-         (!expectedResult || transferredDropCalls ||
+         (!expectedResult ||
           expectedDispatches != 1 || expectedValues.size() != 1)) ||
         (branchSelector && twoBorrowedReferences) ||
         (exerciseSelectorFailure && (!branchSelector || *branchSelector)) ||
@@ -1194,14 +1194,15 @@ bool exercisePrivateRefApplyJit(
             parent.opaque(), const_cast<void*>(handle.opaque()));
         privateRefJitInjectRepeatedResumeFailure = false;
         privateRefJitRepeatedResumeFailureValue = 0;
-        const auto recoveredStatus = statusProbe(
-            parent.opaque(), const_cast<void*>(handle.opaque()));
+        const bool recoveredStatus = transferredDropCalls ||
+            statusProbe(parent.opaque(), const_cast<void*>(handle.opaque())) == 0;
         if (failedStatus !=
                 LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
-            recoveredStatus != 0 ||
+            !recoveredStatus ||
             privateRefJitRepeatedResumeStatus !=
                 LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
-            privateRefJitExecutions != before + 2 ||
+            privateRefJitExecutions != before +
+                (transferredDropCalls ? 1u : 2u) ||
             privateRefJitAllDropProbeCalls != dropsBefore ||
             luna_runtime_fragment_ref_check_v1(
                 handle.opaque(), slot->symbolId.value.c_str(),
@@ -4542,6 +4543,17 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "  let resource = new ReturnedResource(59);\n"
         "  return Err::<i32, ReturnedResource>(move resource);\n"
         "}\n"
+        "runtime fn try_apply_outlined_resource_return("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, ReturnedResource> {\n"
+        "  apply selected {\n"
+        "    checkpoint(1) {\n"
+        "      let resource = new ReturnedResource(59);\n"
+        "      return Err::<i32, ReturnedResource>(move resource);\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
         "runtime fn try_apply_from_resource_return("
             "selected: RuntimeFragmentRef<checkpoint>) "
             "-> Result<i32, ReturnedResource> {\n"
@@ -4722,6 +4734,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* tryApplyResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyDispatchedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyLateResourceReturn = nullptr;
+    moon::FunctionDecl* tryApplyOutlinedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyFromResourceReturn = nullptr;
     moon::FunctionDecl* tryApplySplitOwnedFrom = nullptr;
     moon::FunctionDecl* tryApplySplitOwnedFromElse = nullptr;
@@ -4768,6 +4781,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 tryApplyDispatchedResourceReturn = function;
             if (function->name == "try_apply_late_resource_return")
                 tryApplyLateResourceReturn = function;
+            if (function->name == "try_apply_outlined_resource_return")
+                tryApplyOutlinedResourceReturn = function;
             if (function->name == "try_apply_from_resource_return")
                 tryApplyFromResourceReturn = function;
             if (function->name == "try_apply_split_owned_from")
@@ -4798,7 +4813,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !tryApplyMergeFrom || !tryApplyMergeFromElse ||
         !tryApplyEarlyContinueFrom || !tryApplyEarlyContinueFromElse ||
         !tryApplyResourceReturn || !tryApplyDispatchedResourceReturn ||
-        !tryApplyLateResourceReturn ||
+        !tryApplyLateResourceReturn || !tryApplyOutlinedResourceReturn ||
         !tryApplyFromResourceReturn ||
         !tryApplySplitOwnedFrom || !tryApplySplitOwnedFromElse ||
         !tryApplyOkResourceReturn ||
@@ -6960,9 +6975,48 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     if (!exercisePrivateRefApplyJit(
             *tryApplyModule, *tryApplyLateResourceReturn,
             privateRefJitError, 1, false, 1, false, false,
-            {1}, {}, std::pair<bool, int32_t>{false, 59}, 1)) {
+            {1}, {}, std::pair<bool, int32_t>{false, 59}, 1,
+            false, false, false, nullptr, 0, false, std::nullopt,
+            false, false, std::nullopt, true)) {
         std::cerr << privateRefJitError << '\n';
-        return fail("late owned Result did not transfer its returned owner");
+        return fail("late owned Result lost recoverable failure or owner transfer");
+    }
+    if (!tryApplyOutlinedResourceReturn->controlFlow)
+        return fail("outlined owned Result has no sealed CFG");
+    moon::Verifier outlinedOwnedWitness;
+    const auto& outlinedOwnedGraph =
+        *tryApplyOutlinedResourceReturn->controlFlow;
+    if (!outlinedOwnedWitness.verify(outlinedOwnedGraph, *tryApplyModule))
+        return fail("outlined owned Result lost ownership dataflow");
+    bool sawOutlinedOwnedReturn = false;
+    for (const auto& block : outlinedOwnedGraph.blocks) {
+        if (block.terminator.kind == moon::TerminatorKind::RuntimeSlot) {
+            const auto* active = outlinedOwnedWitness.activeCleanupsBeforeEdge(
+                block.id);
+            if (!active || !active->empty())
+                return fail("outlined owned Result acquired an owner before dispatch");
+        }
+        if (block.terminator.kind != moon::TerminatorKind::Return)
+            continue;
+        for (auto regionId = block.region; !regionId.empty();) {
+            const auto* region = outlinedOwnedGraph.findRegion(regionId);
+            if (!region) return fail("outlined owned Result lost its region");
+            if (region->kind == moon::RegionKind::Continuation) {
+                sawOutlinedOwnedReturn = true;
+                break;
+            }
+            regionId = region->parent;
+        }
+    }
+    if (!sawOutlinedOwnedReturn)
+        return fail("outlined owned Result lost its callback return");
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyOutlinedResourceReturn,
+            privateRefJitError, 1, true, 0, false, false,
+            {1}, {}, std::pair<bool, int32_t>{false, 59}, 1,
+            false, false, false, nullptr, 0, true)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("outlined owned Result escaped the status gate");
     }
     const auto dispatchedReturnedDropBefore =
         privateRefJitReturnedDropProbeCalls;

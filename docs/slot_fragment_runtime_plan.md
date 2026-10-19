@@ -1828,15 +1828,20 @@ the connected outlined callback graph, callback failure returns and absence of
 traps. A JIT probe exercises null context/Ref derivation failure without
 dispatch. A scalar Result outlined-return fixture also injects
 a Runtime dispatch failure, observes `-1` from the status body, then succeeds
-with the same borrowed Ref. The owned Result source can construct a live local
-owner before a derivation or dispatch failure. Its earlier test-only status
-clone lacked cleanup for that owner, so this gate no longer emits that clone
-for owned Results. The owned transfer still calls the aggregate-only body;
-no public execution-failure status is claimed.
+with the same borrowed Ref. An owned Result source can construct a live local
+owner before a derivation or dispatch failure, so the test-only status clone
+still rejects that shape. A narrower owned-Err source with one Slot is now
+admitted only when verified derivation and dispatch boundaries have no active
+cleanup and every outlined continuation block is an operation-free Jump with
+no edge cleanup. Its owner is constructed after dispatch returns. A probe
+forces failure after resume, observes `-1` without a returned-owner Drop, and
+then the regular transfer path succeeds with the same borrowed Ref. The owned
+transfer still calls the aggregate-only body; no public execution-failure
+status is claimed.
 The verifier now reports active canonical cleanup rows at Jump and Slot
 boundaries. Tests distinguish a live owner before the first dispatch from an
-owner constructed only after dispatch; callback return effects still need a
-separate proof before the latter can receive a recoverable status body.
+owner constructed only after dispatch. Broader callback return effects still
+need an uncommitted-owner cleanup proof before status admission.
 The private loaded Result adapter now also has a typed host call. It checks
 output cells before ingress, pins the Runtime-issued parent and borrowed Ref,
 checks the exact frozen Slot/Contract, and retains those pins through the
@@ -2608,23 +2613,28 @@ not a public ABI decision or stable-release approval:
    outlined Result fixture observes dispatch failure through that cell, then
    makes a successful call with the same Ref.
    The generated callback graph has a bounded topology and checked failure
-   returns. The owned Result status clone was withdrawn: some sources allocate
-   an owner before `apply`, and the failure exits did not Drop that live local.
-   The next slice must derive and prove active owned-local cleanup for each
-   recoverable failure edge. Dispatch can also report failure after an outlined
-   callback has moved an owner into return storage, so that state needs a
-   separate uncommitted-owner cleanup path. Prove both cases before re-enabling
-   the clone, then connect it to the transfer entry and check untouched caller
-   outputs before binding public v3 status `3`.
+   returns. Owned Result status remains rejected when a local owner is active
+   at a failure boundary. The next broader slice must derive and prove active
+   owned-local cleanup for each recoverable failure edge. Dispatch can also
+   report failure after an outlined callback has moved an owner into return
+   storage, so that state needs a separate uncommitted-owner cleanup path.
+   Prove both cases before connecting the status body to the transfer entry;
+   then check untouched caller outputs before binding public v3 status `3`.
    The MoonIR ownership verifier now exposes read-only active cleanup rows at
    verified Jump and RuntimeSlot boundaries, after local operations and Slot
    argument evaluation. The dispatched owned-Err fixture has a live `input`
    cleanup at Apply entry and its first Slot, but none for that input after `?`
    consumes it. A separate late-construction owned-Err fixture has no active
    cleanup at derivation or Slot dispatch and passes the existing private owner
-   transfer/Drop path. An empty boundary cleanup set alone is insufficient for
-   status admission: outlined callbacks may construct or move an owner into
-   return storage before Runtime reports a dispatch failure.
+   transfer/Drop path. Its test-only status clone is limited to one Slot and
+   operation-free, Jump-only outlined blocks with no edge cleanup. A handler
+   that calls resume twice makes Runtime report failure after continuation;
+   the clone returns `-1` and a subsequent normal call transfers and Drops the
+   owner. A counterexample with an empty dispatch cleanup set returns an owner
+   from the outlined callback; its normal transfer succeeds, but the status
+   clone is absent. An empty boundary cleanup set alone remains insufficient
+   for broader admission: outlined callbacks may move an owner into return
+   storage before Runtime reports a dispatch failure.
    Every admitted exit must release contexts in
    inner-to-outer order exactly once, after apply-local cleanup and before a
    borrowed Ref owner is dropped. Keep unsupported paths rejected meanwhile.
