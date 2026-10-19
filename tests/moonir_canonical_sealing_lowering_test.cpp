@@ -364,25 +364,22 @@ bool exercisePrivateRefApplyJit(
     if (transferredDropCalls && !dropAddress) return false;
     using StatusProbe = int32_t (*)(const void*, void*);
     const void* statusProbeAddress =
-        exerciseLoadedResult || exerciseStatusDispatchFailure
+        exerciseStatusDispatchFailure
             ? jit->lookup(
                 "__luna_private_ref_result_status_failure_probe_test", error)
             : nullptr;
-    if ((exerciseLoadedResult || exerciseStatusDispatchFailure) &&
-        !statusProbeAddress) return false;
+    if (exerciseStatusDispatchFailure && !statusProbeAddress) return false;
     const auto statusProbe = reinterpret_cast<StatusProbe>(
         const_cast<void*>(statusProbeAddress));
     std::unique_ptr<LunaPrivateRefResultLoadedEntry> loadedResult;
     if (exerciseLoadedResult) {
-        const auto dispatchesBeforeProbe = privateRefJitExecutions;
-        const auto dropsBeforeProbe = privateRefJitAllDropProbeCalls;
-        if (statusProbe(nullptr, nullptr) !=
-                LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
-            privateRefJitExecutions != dispatchesBeforeProbe ||
-            privateRefJitAllDropProbeCalls != dropsBeforeProbe) {
-            error = "private Result status body did not recover from derivation failure";
+        if (jit->lookup(
+                "__luna_private_ref_result_status_failure_probe_test",
+                error)) {
+            error = "owned Result exposed a status body without failure cleanup";
             return false;
         }
+        error.clear();
         loadedResult = CodeGenerator::
             loadPrivateRuntimeFragmentRefResultEntryForTest(
                 module, function, jit, error);
@@ -398,6 +395,17 @@ bool exercisePrivateRefApplyJit(
             return false;
         }
         error.clear();
+    }
+    if (exerciseStatusDispatchFailure) {
+        const auto dispatchesBeforeProbe = privateRefJitExecutions;
+        const auto dropsBeforeProbe = privateRefJitAllDropProbeCalls;
+        if (statusProbe(nullptr, nullptr) !=
+                LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
+            privateRefJitExecutions != dispatchesBeforeProbe ||
+            privateRefJitAllDropProbeCalls != dropsBeforeProbe) {
+            error = "private Result status body did not recover from derivation failure";
+            return false;
+        }
     }
     std::unique_ptr<LunaPrivateRefUnitApplyLoadedEntry> loadedIngress;
     if (exerciseIngressGate) {

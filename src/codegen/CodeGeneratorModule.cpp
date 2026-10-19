@@ -2083,11 +2083,11 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         std::string invalidIR;
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
         if (executable) {
-            if (privateOwnedResultFacts ||
-                (privateScalarResultJit && function.params.size() == 1)) {
-                // Build a second, private source body so the existing Result
-                // transfer proof keeps its original graph. A trailing cell
-                // separates execution failure from the source Result tag.
+            if (privateScalarResultJit && function.params.size() == 1) {
+                // Recoverable failure is admitted only for scalar Results.
+                // Owned Results can have a live local owner when derivation or
+                // dispatch fails; their failure cleanup still needs proof.
+                // A trailing cell separates failure from the Result tag.
                 std::vector<llvm::Type*> statusParameters(
                     body->getFunctionType()->params().begin(),
                     body->getFunctionType()->params().end());

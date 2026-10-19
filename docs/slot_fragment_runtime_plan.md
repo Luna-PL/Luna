@@ -1821,15 +1821,18 @@ cannot claim the public v3 execution-failure status domain. The loaded adapter
 checks that proof before looking up code in the same JIT
 module. The six-argument entry is still limited to the private JIT candidate
 shape and does not create a Native v3 export.
-An additional private Result source body now takes a trailing status cell.
+An additional private scalar Result source body takes a trailing status cell.
 Its direct context-derivation and Slot-dispatch failure exits write `-1` and
 return an inert Result after context cleanup. The producer checks those exits,
 the connected outlined callback graph, callback failure returns and absence of
 traps. A JIT probe exercises null context/Ref derivation failure without
-dispatch or resource Drop. A scalar Result outlined-return fixture also injects
+dispatch. A scalar Result outlined-return fixture also injects
 a Runtime dispatch failure, observes `-1` from the status body, then succeeds
-with the same borrowed Ref. The owned Result transfer still calls the old body;
-the status body is not yet bound to caller outputs or a public status domain.
+with the same borrowed Ref. The owned Result source can construct a live local
+owner before a derivation or dispatch failure. Its earlier test-only status
+clone lacked cleanup for that owner, so this gate no longer emits that clone
+for owned Results. The owned transfer still calls the aggregate-only body;
+no public execution-failure status is claimed.
 The private loaded Result adapter now also has a typed host call. It checks
 output cells before ingress, pins the Runtime-issued parent and borrowed Ref,
 checks the exact frozen Slot/Contract, and retains those pins through the
@@ -2595,16 +2598,20 @@ not a public ABI decision or stable-release approval:
    path that can return those failures.
    The existing Result transfer still calls the aggregate-only source body,
    whose derivation and dispatch failures Drop active contexts and trap. A
-   separate test-only source body now carries an execution status through a
-   trailing cell. Its direct failure exits return `-1`, and a null-input JIT
-   probe confirms the derivation failure path returns without dispatch or
-   resource Drop. A scalar outlined Result fixture now observes dispatch
-   failure through that cell, then makes a successful call with the same Ref.
+   separate test-only scalar Result source body carries an execution status
+   through a trailing cell. Its direct failure exits return `-1`, and a
+   null-input JIT probe confirms derivation failure without dispatch. A scalar
+   outlined Result fixture observes dispatch failure through that cell, then
+   makes a successful call with the same Ref.
    The generated callback graph has a bounded topology and checked failure
-   returns. The next slice must prove owned Result cleanup on these failure
-   paths, connect the status body to the transfer entry, and check that a real
-   failure leaves all caller outputs untouched before binding the public v3
-   status `3` domain.
+   returns. The owned Result status clone was withdrawn: some sources allocate
+   an owner before `apply`, and the failure exits did not Drop that live local.
+   The next slice must derive and prove active owned-local cleanup for each
+   recoverable failure edge. Dispatch can also report failure after an outlined
+   callback has moved an owner into return storage, so that state needs a
+   separate uncommitted-owner cleanup path. Prove both cases before re-enabling
+   the clone, then connect it to the transfer entry and check untouched caller
+   outputs before binding public v3 status `3`.
    Every admitted exit must release contexts in
    inner-to-outer order exactly once, after apply-local cleanup and before a
    borrowed Ref owner is dropped. Keep unsupported paths rejected meanwhile.
