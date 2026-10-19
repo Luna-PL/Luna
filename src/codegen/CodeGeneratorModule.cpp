@@ -154,6 +154,62 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
     return PrivateOwnedResultStatusPlan{*failureCleanup};
 }
 
+// A scalar Result can still leave an unrelated resource live on failure.
+// Keep this probe limited to empty failure boundaries and inert outlines.
+bool privateScalarResultStatusCandidate(
+    const moon::Module& program, const FunctionDecl& function) {
+    const auto* graph = function.controlFlow.get();
+    if (!graph) return false;
+    moon::Verifier verifier;
+    if (!verifier.verify(*graph, program)) return false;
+    std::string flowError;
+    const auto flow = moon::planRuntimeRefApplyFlow(*graph, flowError);
+    if (!flow) return false;
+    size_t slotCount = 0;
+    for (const auto& block : graph->blocks) {
+        bool outlined = false;
+        for (auto regionId = block.region; !regionId.empty();) {
+            const auto* region = graph->findRegion(regionId);
+            if (!region) return false;
+            if (region->kind == moon::RegionKind::Continuation) {
+                outlined = true;
+                break;
+            }
+            regionId = region->parent;
+        }
+        if (outlined) {
+            if (!block.operations.empty()) return false;
+            if (block.terminator.kind == moon::TerminatorKind::Jump) {
+                if (!block.terminator.primary.cleanups.empty()) return false;
+            } else if (block.terminator.kind == moon::TerminatorKind::Return) {
+                const auto* result = dynamic_cast<const moon::ResultConstructExpr*>(
+                    block.terminator.operand.get());
+                if (!block.terminator.exitCleanups.empty() || !result ||
+                    !dynamic_cast<const moon::IntLiteralExpr*>(
+                        result->payload.get()))
+                    return false;
+            } else return false;
+        }
+        if (block.terminator.kind == moon::TerminatorKind::RuntimeSlot) {
+            ++slotCount;
+            const auto* active = verifier.activeCleanupsBeforeEdge(block.id);
+            if (outlined || !active || !active->empty()) return false;
+        }
+    }
+    if (!slotCount) return false;
+    for (const auto& edge : flow->edges)
+        if (!edge.enters.empty()) {
+            const auto* source = graph->findBlock(edge.source);
+            const auto* active = verifier.activeCleanupsBeforeEdge(edge.source);
+            if (!source || source->terminator.kind !=
+                    moon::TerminatorKind::Jump ||
+                !source->terminator.primary.cleanups.empty() ||
+                !active || !active->empty())
+                return false;
+        }
+    return true;
+}
+
 // The unit Apply JIT ingress is a candidate for a typed host entry. Resolve
 // its identity from frozen records instead of inferring a callable ABI from
 // the wrapper's raw address. This does not publish or serialize the entry.
@@ -2162,8 +2218,11 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             if (privateErrResourceResultJit && function.params.size() == 1)
                 ownedStatusPlan = privateOwnedResultStatusCandidate(
                     program, function);
+            const bool scalarStatusCandidate = privateScalarResultJit &&
+                function.params.size() == 1 &&
+                privateScalarResultStatusCandidate(program, function);
             if (function.params.size() == 1 &&
-                (privateScalarResultJit || ownedStatusPlan)) {
+                (scalarStatusCandidate || ownedStatusPlan)) {
                 // The bounded owned Result clone releases its one proven
                 // root owner when derivation or dispatch reports failure.
                 // A trailing cell separates failure from the Result tag.

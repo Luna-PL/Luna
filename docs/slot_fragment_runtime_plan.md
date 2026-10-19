@@ -1821,16 +1821,22 @@ cannot claim the public v3 execution-failure status domain. The loaded adapter
 checks that proof before looking up code in the same JIT
 module. The six-argument entry is still limited to the private JIT candidate
 shape and does not create a Native v3 export.
-An additional private scalar Result source body takes a trailing status cell.
-Its direct context-derivation and Slot-dispatch failure exits write `-1` and
-return an inert Result after context cleanup. The producer checks those exits,
-the connected outlined callback graph, callback failure returns and absence of
-traps. A JIT probe exercises null context/Ref derivation failure without
-dispatch. A scalar Result outlined-return fixture also injects
-a Runtime dispatch failure, observes `-1` from the status body, then succeeds
-with the same borrowed Ref. An owned Result source can construct a live local
-owner before a derivation or dispatch failure, so the test-only status clone
-admits only one proven root owner cleanup at both failure boundaries. It emits
+An additional private scalar Result source body takes a trailing status cell
+only when verified derivation and Slot-dispatch boundaries have no active
+cleanup and outlined blocks cannot retain an owner. Its direct failure exits
+write `-1` and return an inert Result after context cleanup. The producer checks
+those exits, the connected outlined callback graph, callback failure returns
+and absence of traps. A JIT probe exercises null context/Ref derivation failure
+without dispatch. A scalar Result outlined-return fixture also injects a
+Runtime dispatch failure, observes `-1` from the status body, then succeeds
+with the same borrowed Ref. A scalar-returning counterexample keeps a resource
+live at dispatch; its normal Drop succeeds and no status clone is emitted.
+Another counterexample creates its resource inside the outlined callback;
+its dispatch boundary is empty and normal callback Drop succeeds, but the
+status clone is still absent.
+An owned Result source can construct a live local owner before a derivation
+or dispatch failure, so the test-only status clone admits only one proven root
+owner cleanup at both failure boundaries. It emits
 that canonical Drop on derivation and dispatch failure. A second bounded
 owned-Err shape has no active cleanup there and constructs its owner after
 dispatch returns. Both require one Slot and operation-free Jump-only outlined
@@ -2609,10 +2615,15 @@ not a public ABI decision or stable-release approval:
    The existing Result transfer still calls the aggregate-only source body,
    whose derivation and dispatch failures Drop active contexts and trap. A
    separate test-only scalar Result source body carries an execution status
-   through a trailing cell. Its direct failure exits return `-1`, and a
-   null-input JIT probe confirms derivation failure without dispatch. A scalar
-   outlined Result fixture observes dispatch failure through that cell, then
-   makes a successful call with the same Ref.
+   through a trailing cell only when ownership snapshots are empty at every
+   derivation and dispatch site and outlined blocks cannot retain an owner.
+   Its direct failure exits return `-1`; a null-input JIT probe confirms
+   derivation failure without dispatch. A scalar outlined Result fixture
+   observes dispatch failure through that cell, then
+   makes a successful call with the same Ref. A scalar Result with a live
+   resource at its Slot keeps normal Drop but has no recoverable status clone.
+   An outlined scalar callback that creates and Drops its own resource also
+   has no status clone despite an empty dispatch cleanup set.
    The generated callback graph has a bounded topology and checked failure
    returns. One owned Result status shape now proves the same single root
    cleanup row at Apply entry and Slot dispatch and emits that Drop on both

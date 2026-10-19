@@ -295,7 +295,8 @@ bool exercisePrivateRefApplyJit(
     std::optional<std::pair<int32_t, unsigned>> injectedDispatchFailure =
         std::nullopt,
     bool exerciseStatusDispatchFailure = false,
-    unsigned statusFailureDropCalls = 0) {
+    unsigned statusFailureDropCalls = 0,
+    bool expectNoStatusBody = false) {
     const moon::SlotDecl* slot = nullptr;
     const moon::SlotDecl* secondSlot = nullptr;
     for (const auto& declaration : module.declarations)
@@ -373,14 +374,16 @@ bool exercisePrivateRefApplyJit(
     const auto statusProbe = reinterpret_cast<StatusProbe>(
         const_cast<void*>(statusProbeAddress));
     std::unique_ptr<LunaPrivateRefResultLoadedEntry> loadedResult;
-    if (exerciseLoadedResult) {
+    if (exerciseLoadedResult || expectNoStatusBody) {
         if (jit->lookup(
                 "__luna_private_ref_result_status_failure_probe_test",
                 error)) {
-            error = "owned Result exposed a status body without failure cleanup";
+            error = "Result exposed an unproved failure status body";
             return false;
         }
         error.clear();
+    }
+    if (exerciseLoadedResult) {
         loadedResult = CodeGenerator::
             loadPrivateRuntimeFragmentRefResultEntryForTest(
                 module, function, jit, error);
@@ -4553,6 +4556,24 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "  apply selected { checkpoint(1) {} }\n"
         "  return Err::<i32, ReturnedResource>(move resource);\n"
         "}\n"
+        "runtime fn try_apply_scalar_preowned("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, i32> {\n"
+        "  let resource = new ReturnedResource(59);\n"
+        "  apply selected { checkpoint(1) {} }\n"
+        "  return Ok(0);\n"
+        "}\n"
+        "runtime fn try_apply_scalar_outlined_owner("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, i32> {\n"
+        "  apply selected {\n"
+        "    checkpoint(1) {\n"
+        "      let resource = new ReturnedResource(59);\n"
+        "      return Ok(0);\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(1);\n"
+        "}\n"
         "runtime fn try_apply_outlined_resource_return("
             "selected: RuntimeFragmentRef<checkpoint>) "
             "-> Result<i32, ReturnedResource> {\n"
@@ -4745,6 +4766,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* tryApplyDispatchedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyLateResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyPreownedResourceReturn = nullptr;
+    moon::FunctionDecl* tryApplyScalarPreowned = nullptr;
+    moon::FunctionDecl* tryApplyScalarOutlinedOwner = nullptr;
     moon::FunctionDecl* tryApplyOutlinedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyFromResourceReturn = nullptr;
     moon::FunctionDecl* tryApplySplitOwnedFrom = nullptr;
@@ -4794,6 +4817,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 tryApplyLateResourceReturn = function;
             if (function->name == "try_apply_preowned_resource_return")
                 tryApplyPreownedResourceReturn = function;
+            if (function->name == "try_apply_scalar_preowned")
+                tryApplyScalarPreowned = function;
+            if (function->name == "try_apply_scalar_outlined_owner")
+                tryApplyScalarOutlinedOwner = function;
             if (function->name == "try_apply_outlined_resource_return")
                 tryApplyOutlinedResourceReturn = function;
             if (function->name == "try_apply_from_resource_return")
@@ -4827,6 +4854,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !tryApplyEarlyContinueFrom || !tryApplyEarlyContinueFromElse ||
         !tryApplyResourceReturn || !tryApplyDispatchedResourceReturn ||
         !tryApplyLateResourceReturn || !tryApplyPreownedResourceReturn ||
+        !tryApplyScalarPreowned || !tryApplyScalarOutlinedOwner ||
         !tryApplyOutlinedResourceReturn ||
         !tryApplyFromResourceReturn ||
         !tryApplySplitOwnedFrom || !tryApplySplitOwnedFromElse ||
@@ -7051,6 +7079,73 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     if (privateRefJitAllDropProbeCalls != preownedDropsBefore + 4 ||
         !privateRefJitDropProbeValid)
         return fail("preowned Result did not Drop once on each path");
+    if (!tryApplyScalarPreowned->controlFlow)
+        return fail("scalar preowned Result has no sealed CFG");
+    moon::Verifier scalarPreownedWitness;
+    const auto& scalarPreownedGraph = *tryApplyScalarPreowned->controlFlow;
+    if (!scalarPreownedWitness.verify(scalarPreownedGraph, *tryApplyModule))
+        return fail("scalar preowned Result lost ownership dataflow");
+    bool scalarPreownedDispatchOwnsResource = false;
+    for (const auto& block : scalarPreownedGraph.blocks)
+        if (block.terminator.kind == moon::TerminatorKind::RuntimeSlot) {
+            const auto* active = scalarPreownedWitness.activeCleanupsBeforeEdge(
+                block.id);
+            scalarPreownedDispatchOwnsResource |= active && !active->empty();
+        }
+    if (!scalarPreownedDispatchOwnsResource)
+        return fail("scalar preowned Result lost its dispatch owner");
+    const auto scalarPreownedDropsBefore = privateRefJitAllDropProbeCalls;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyScalarPreowned,
+            privateRefJitError, 1, false, 1, false, false,
+            {1}, {}, std::pair<bool, int32_t>{true, 0}, std::nullopt,
+            false, false, false, nullptr, 1, false, std::nullopt,
+            false, false, std::nullopt, false, 0, true)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("scalar preowned Result exposed an unsafe status body");
+    }
+    if (privateRefJitAllDropProbeCalls != scalarPreownedDropsBefore + 2)
+        return fail("scalar preowned Result lost normal cleanup");
+    if (!tryApplyScalarOutlinedOwner->controlFlow)
+        return fail("scalar outlined owner has no sealed CFG");
+    moon::Verifier scalarOutlinedWitness;
+    const auto& scalarOutlinedGraph =
+        *tryApplyScalarOutlinedOwner->controlFlow;
+    if (!scalarOutlinedWitness.verify(scalarOutlinedGraph, *tryApplyModule))
+        return fail("scalar outlined owner lost ownership dataflow");
+    bool scalarOutlinedDispatchIsEmpty = false;
+    bool scalarOutlinedConstructsOwner = false;
+    for (const auto& block : scalarOutlinedGraph.blocks) {
+        if (block.terminator.kind == moon::TerminatorKind::RuntimeSlot) {
+            const auto* active = scalarOutlinedWitness.activeCleanupsBeforeEdge(
+                block.id);
+            scalarOutlinedDispatchIsEmpty |= active && active->empty();
+        }
+        if (block.operations.empty()) continue;
+        for (auto regionId = block.region; !regionId.empty();) {
+            const auto* region = scalarOutlinedGraph.findRegion(regionId);
+            if (!region) return fail("scalar outlined owner lost its region");
+            if (region->kind == moon::RegionKind::Continuation) {
+                scalarOutlinedConstructsOwner = true;
+                break;
+            }
+            regionId = region->parent;
+        }
+    }
+    if (!scalarOutlinedDispatchIsEmpty || !scalarOutlinedConstructsOwner)
+        return fail("scalar outlined owner lost its callback counterexample");
+    const auto scalarOutlinedDropsBefore = privateRefJitAllDropProbeCalls;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyScalarOutlinedOwner,
+            privateRefJitError, 1, true, 0, false, false,
+            {1}, {}, std::pair<bool, int32_t>{true, 0}, std::nullopt,
+            false, false, false, nullptr, 1, false, std::nullopt,
+            false, false, std::nullopt, false, 0, true)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("scalar outlined owner exposed an unsafe status body");
+    }
+    if (privateRefJitAllDropProbeCalls != scalarOutlinedDropsBefore + 2)
+        return fail("scalar outlined owner lost callback cleanup");
     if (!tryApplyOutlinedResourceReturn->controlFlow)
         return fail("outlined owned Result has no sealed CFG");
     moon::Verifier outlinedOwnedWitness;
