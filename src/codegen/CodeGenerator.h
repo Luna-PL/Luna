@@ -421,6 +421,9 @@ private:
     bool mPrivateRefApplyEnabled = false;
     // Internal status result for the single-borrowed-Ref/unit proof body.
     bool mPrivateRefUnitStatusBody = false;
+    // Test-only Result body with a trailing status cell. It keeps the source
+    // Result return separate from a recoverable Ref-apply execution failure.
+    bool mPrivateRefResultStatusBody = false;
     bool mCurrentFunctionIsKernel = false;
     std::unordered_map<std::string, llvm::Function*> mFunctions;
     std::unordered_map<std::string, llvm::Function*> mDropCallbacks;

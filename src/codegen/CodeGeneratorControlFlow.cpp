@@ -382,7 +382,19 @@ void CodeGenerator::generateControlFlowBody(
             coerceCallArgument(argument, storageType),
             storage);
     }
-    if (parameterIndex != func->arg_size())
+    llvm::Argument* privateResultStatus = nullptr;
+    if (mPrivateRefResultStatusBody &&
+        parameterIndex + 1 == func->arg_size() &&
+        func->getArg(static_cast<unsigned>(parameterIndex))
+            ->getType()->isPointerTy()) {
+        privateResultStatus = func->getArg(
+            static_cast<unsigned>(parameterIndex));
+        mBuilder->CreateStore(llvm::ConstantInt::get(mHelpers->i32Ty(), 0),
+                              privateResultStatus);
+        ++parameterIndex;
+    }
+    if (parameterIndex != func->arg_size() ||
+        (mPrivateRefResultStatusBody && !privateResultStatus))
         error("canonical parameter table has the wrong LLVM arity");
 
     std::optional<moon::RuntimeRefApplyFlowPlan> refApplyFlow;
@@ -586,7 +598,8 @@ void CodeGenerator::generateControlFlowBody(
                 std::vector<moon::RegionId>{},
             owners, "canonical Ref apply return cleanup");
     };
-    const auto emitEdge = [this, &blocks, &emitCleanups, &graph,
+    const auto emitEdge = [this, func, privateResultStatus,
+                           &blocks, &emitCleanups, &graph,
                            &refApplyFlow, &refContextCells, &contextOwnersFor,
                            &emitContextExitCleanups](
         moon::BlockId source, const moon::ControlEdge& edge,
@@ -654,7 +667,14 @@ void CodeGenerator::generateControlFlowBody(
                     mBuilder->CreateRet(llvm::ConstantInt::getSigned(
                         mHelpers->i32Ty(),
                         LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1));
-                else {
+                else if (privateResultStatus) {
+                    mBuilder->CreateStore(llvm::ConstantInt::getSigned(
+                        mHelpers->i32Ty(),
+                        LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1),
+                        privateResultStatus);
+                    mBuilder->CreateRet(llvm::Constant::getNullValue(
+                        func->getReturnType()));
+                } else {
                     auto* trap = llvm::Intrinsic::getOrInsertDeclaration(
                         mModule.get(), llvm::Intrinsic::trap);
                     mBuilder->CreateCall(trap);
@@ -1602,7 +1622,14 @@ void CodeGenerator::generateControlFlowBody(
                         mBuilder->CreateRet(llvm::ConstantInt::getSigned(
                             mHelpers->i32Ty(),
                             LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1));
-                    else {
+                    else if (privateResultStatus) {
+                        mBuilder->CreateStore(llvm::ConstantInt::getSigned(
+                            mHelpers->i32Ty(),
+                            LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1),
+                            privateResultStatus);
+                        mBuilder->CreateRet(llvm::Constant::getNullValue(
+                            func->getReturnType()));
+                    } else {
                         auto* trap = llvm::Intrinsic::getOrInsertDeclaration(
                             mModule.get(), llvm::Intrinsic::trap);
                         mBuilder->CreateCall(trap);

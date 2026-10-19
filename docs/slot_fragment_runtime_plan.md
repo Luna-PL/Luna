@@ -1821,6 +1821,13 @@ cannot claim the public v3 execution-failure status domain. The loaded adapter
 checks that proof before looking up code in the same JIT
 module. The six-argument entry is still limited to the private JIT candidate
 shape and does not create a Native v3 export.
+An additional private Result source body now takes a trailing status cell.
+Its direct context-derivation and Slot-dispatch failure exits write `-1` and
+return an inert Result after context cleanup. The producer checks that these
+direct failure exits exist and contain no trap; a JIT probe exercises null
+context/Ref derivation failure without dispatch or resource Drop. This body is
+not yet called by the six-argument transfer entry, and outlined continuation
+failure propagation is not yet proved.
 The private loaded Result adapter now also has a typed host call. It checks
 output cells before ingress, pins the Runtime-issued parent and borrowed Ref,
 checks the exact frozen Slot/Contract, and retains those pins through the
@@ -2584,15 +2591,16 @@ not a public ABI decision or stable-release approval:
    cleanup of an uncommitted returned owner.
    Specify recoverable derivation/dispatch failure cleanup before publishing a
    path that can return those failures.
-   The current Result body returns only the LLVM Result aggregate; unlike the
-   private unit-status body, failed context derivation or Slot dispatch still
-   Drops active contexts and traps. Its transfer wrapper therefore cannot
-   claim public execution-failure status `3`. The next implementation slice
-   needs a private status-bearing Result body protocol, failure propagation
-   through outlined continuations and a transfer check that keeps all caller
-   outputs untouched on that real failure edge. Prove the emitted cleanup
-   order and exercise failure followed by a successful call before binding a
-   public v3 status domain.
+   The existing Result transfer still calls the aggregate-only source body,
+   whose derivation and dispatch failures Drop active contexts and trap. A
+   separate test-only source body now carries an execution status through a
+   trailing cell. Its direct failure exits return `-1`, and a null-input JIT
+   probe confirms the derivation failure path returns without dispatch or
+   resource Drop. The next slice must propagate failures from outlined
+   continuations into that cell, prove the emitted cleanup order, connect the
+   status body to the transfer entry, and check that a real failure leaves all
+   caller outputs untouched. Exercise failure followed by success before
+   binding the public v3 status `3` domain.
    Every admitted exit must release contexts in
    inner-to-outer order exactly once, after apply-local cleanup and before a
    borrowed Ref owner is dropped. Keep unsupported paths rejected meanwhile.

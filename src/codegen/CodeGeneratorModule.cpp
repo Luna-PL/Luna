@@ -2083,6 +2083,119 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         std::string invalidIR;
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
         if (executable) {
+            if (privateOwnedResultFacts) {
+                // Build a second, private source body so the existing Result
+                // transfer proof keeps its original graph. A trailing cell
+                // separates execution failure from the source Result tag.
+                std::vector<llvm::Type*> statusParameters(
+                    body->getFunctionType()->params().begin(),
+                    body->getFunctionType()->params().end());
+                statusParameters.push_back(proof.mHelpers->ptrTy());
+                auto* statusBody = llvm::Function::Create(
+                    llvm::FunctionType::get(body->getReturnType(),
+                                            statusParameters, false),
+                    llvm::Function::InternalLinkage,
+                    "__luna_private_ref_result_status_body_test",
+                    *proof.mModule);
+                proof.mFunctions[function.generatedSymbolName] = statusBody;
+                proof.mPrivateRefResultStatusBody = true;
+                proof.generateFunctionBody(&function);
+                proof.mPrivateRefResultStatusBody = false;
+                proof.mFunctions[function.generatedSymbolName] = body;
+                if (!proof.mErrors.empty() || statusBody->empty() ||
+                    statusBody->arg_size() != 3) {
+                    failure = proof.mErrors.empty()
+                        ? "private Ref Result status body lost its source signature"
+                        : proof.mErrors.front().message;
+                    return false;
+                }
+                size_t derivationFailures = 0;
+                size_t dispatchFailures = 0;
+                size_t statusInitializations = 0;
+                const auto* statusArgument = statusBody->getArg(2);
+                for (const auto& block : *statusBody) {
+                    const bool derivationFailure =
+                        block.getName().starts_with("ref.apply.failed");
+                    const bool dispatchFailure =
+                        block.getName().starts_with("runtime.slot.failed");
+                    for (const auto& instruction : block) {
+                        const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                            &instruction);
+                        if (call && call->getCalledFunction() &&
+                            call->getCalledFunction()->getName() == "llvm.trap") {
+                            failure = "private Ref Result status body retained a trap";
+                            return false;
+                        }
+                        const auto* store = llvm::dyn_cast<llvm::StoreInst>(
+                            &instruction);
+                        if (!store || store->getPointerOperand() !=
+                                statusArgument)
+                            continue;
+                        const auto* value = llvm::dyn_cast<llvm::ConstantInt>(
+                            store->getValueOperand());
+                        if (value && value->isZero() &&
+                            &block == &statusBody->getEntryBlock())
+                            ++statusInitializations;
+                        else if (!value || value->getSExtValue() !=
+                                LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
+                                 (!derivationFailure && !dispatchFailure)) {
+                            failure = "private Ref Result body wrote an unproved status";
+                            return false;
+                        }
+                    }
+                    if (!derivationFailure && !dispatchFailure) continue;
+                    const auto* returned = llvm::dyn_cast<llvm::ReturnInst>(
+                        block.getTerminator());
+                    const auto* nullResult = returned
+                        ? llvm::dyn_cast_or_null<llvm::Constant>(
+                            returned->getReturnValue())
+                        : nullptr;
+                    const llvm::StoreInst* failureStore = nullptr;
+                    for (const auto& instruction : block) {
+                        const auto* store = llvm::dyn_cast<llvm::StoreInst>(
+                            &instruction);
+                        if (!store || store->getPointerOperand() !=
+                                statusArgument)
+                            continue;
+                        const auto* value = llvm::dyn_cast<llvm::ConstantInt>(
+                            store->getValueOperand());
+                        if (failureStore || !value || value->getSExtValue() !=
+                                LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1) {
+                            failure = "private Ref Result failure returned an unproved status";
+                            return false;
+                        }
+                        failureStore = store;
+                    }
+                    if (!nullResult || !nullResult->isNullValue() ||
+                        !failureStore) {
+                        failure = "private Ref Result failure lost its status return";
+                        return false;
+                    }
+                    if (derivationFailure) ++derivationFailures;
+                    else ++dispatchFailures;
+                }
+                if (statusInitializations != 1 ||
+                    derivationFailures != bindings.size() ||
+                    dispatchFailures != slotSites.size()) {
+                    failure = "private Ref Result status body lost a failure exit";
+                    return false;
+                }
+                auto* statusProbe = llvm::Function::Create(
+                    llvm::FunctionType::get(proof.mHelpers->i32Ty(), false),
+                    llvm::Function::ExternalLinkage,
+                    "__luna_private_ref_result_status_failure_probe_test",
+                    *proof.mModule);
+                llvm::IRBuilder<> statusBuilder(llvm::BasicBlock::Create(
+                    *proof.mCtx, "entry", statusProbe));
+                auto* statusCell = statusBuilder.CreateAlloca(
+                    proof.mHelpers->i32Ty());
+                auto* nullPointer = llvm::ConstantPointerNull::get(
+                    llvm::cast<llvm::PointerType>(proof.mHelpers->ptrTy()));
+                statusBuilder.CreateCall(statusBody,
+                    {nullPointer, nullPointer, statusCell});
+                statusBuilder.CreateRet(statusBuilder.CreateLoad(
+                    proof.mHelpers->i32Ty(), statusCell));
+            }
             auto* entryType = privateResultJit
                 ? llvm::FunctionType::get(
                     proof.mHelpers->i64Ty(),

@@ -360,6 +360,21 @@ bool exercisePrivateRefApplyJit(
     if (transferredDropCalls && !dropAddress) return false;
     std::unique_ptr<LunaPrivateRefResultLoadedEntry> loadedResult;
     if (exerciseLoadedResult) {
+        const void* statusProbeAddress = jit->lookup(
+            "__luna_private_ref_result_status_failure_probe_test", error);
+        if (!statusProbeAddress) return false;
+        using StatusProbe = int32_t (*)();
+        const auto statusProbe = reinterpret_cast<StatusProbe>(
+            const_cast<void*>(statusProbeAddress));
+        const auto dispatchesBeforeProbe = privateRefJitExecutions;
+        const auto dropsBeforeProbe = privateRefJitAllDropProbeCalls;
+        if (statusProbe() !=
+                LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
+            privateRefJitExecutions != dispatchesBeforeProbe ||
+            privateRefJitAllDropProbeCalls != dropsBeforeProbe) {
+            error = "private Result status body did not recover from derivation failure";
+            return false;
+        }
         loadedResult = CodeGenerator::
             loadPrivateRuntimeFragmentRefResultEntryForTest(
                 module, function, jit, error);
