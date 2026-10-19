@@ -294,7 +294,8 @@ bool exercisePrivateRefApplyJit(
     bool failSecondDispatch = false,
     std::optional<std::pair<int32_t, unsigned>> injectedDispatchFailure =
         std::nullopt,
-    bool exerciseStatusDispatchFailure = false) {
+    bool exerciseStatusDispatchFailure = false,
+    unsigned statusFailureDropCalls = 0) {
     const moon::SlotDecl* slot = nullptr;
     const moon::SlotDecl* secondSlot = nullptr;
     for (const auto& declaration : module.declarations)
@@ -402,7 +403,8 @@ bool exercisePrivateRefApplyJit(
         if (statusProbe(nullptr, nullptr) !=
                 LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
             privateRefJitExecutions != dispatchesBeforeProbe ||
-            privateRefJitAllDropProbeCalls != dropsBeforeProbe) {
+            privateRefJitAllDropProbeCalls !=
+                dropsBeforeProbe + statusFailureDropCalls) {
             error = "private Result status body did not recover from derivation failure";
             return false;
         }
@@ -1203,7 +1205,8 @@ bool exercisePrivateRefApplyJit(
                 LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
             privateRefJitExecutions != before +
                 (transferredDropCalls ? 1u : 2u) ||
-            privateRefJitAllDropProbeCalls != dropsBefore ||
+            privateRefJitAllDropProbeCalls !=
+                dropsBefore + statusFailureDropCalls ||
             luna_runtime_fragment_ref_check_v1(
                 handle.opaque(), slot->symbolId.value.c_str(),
                 slot->contractId.value.c_str()) !=
@@ -4543,6 +4546,13 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "  let resource = new ReturnedResource(59);\n"
         "  return Err::<i32, ReturnedResource>(move resource);\n"
         "}\n"
+        "runtime fn try_apply_preowned_resource_return("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, ReturnedResource> {\n"
+        "  let resource = new ReturnedResource(59);\n"
+        "  apply selected { checkpoint(1) {} }\n"
+        "  return Err::<i32, ReturnedResource>(move resource);\n"
+        "}\n"
         "runtime fn try_apply_outlined_resource_return("
             "selected: RuntimeFragmentRef<checkpoint>) "
             "-> Result<i32, ReturnedResource> {\n"
@@ -4734,6 +4744,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* tryApplyResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyDispatchedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyLateResourceReturn = nullptr;
+    moon::FunctionDecl* tryApplyPreownedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyOutlinedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyFromResourceReturn = nullptr;
     moon::FunctionDecl* tryApplySplitOwnedFrom = nullptr;
@@ -4781,6 +4792,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 tryApplyDispatchedResourceReturn = function;
             if (function->name == "try_apply_late_resource_return")
                 tryApplyLateResourceReturn = function;
+            if (function->name == "try_apply_preowned_resource_return")
+                tryApplyPreownedResourceReturn = function;
             if (function->name == "try_apply_outlined_resource_return")
                 tryApplyOutlinedResourceReturn = function;
             if (function->name == "try_apply_from_resource_return")
@@ -4813,7 +4826,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !tryApplyMergeFrom || !tryApplyMergeFromElse ||
         !tryApplyEarlyContinueFrom || !tryApplyEarlyContinueFromElse ||
         !tryApplyResourceReturn || !tryApplyDispatchedResourceReturn ||
-        !tryApplyLateResourceReturn || !tryApplyOutlinedResourceReturn ||
+        !tryApplyLateResourceReturn || !tryApplyPreownedResourceReturn ||
+        !tryApplyOutlinedResourceReturn ||
         !tryApplyFromResourceReturn ||
         !tryApplySplitOwnedFrom || !tryApplySplitOwnedFromElse ||
         !tryApplyOkResourceReturn ||
@@ -6981,6 +6995,62 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         std::cerr << privateRefJitError << '\n';
         return fail("late owned Result lost recoverable failure or owner transfer");
     }
+    if (!tryApplyPreownedResourceReturn->controlFlow)
+        return fail("preowned Result has no sealed CFG");
+    moon::Verifier preownedWitness;
+    const auto& preownedGraph = *tryApplyPreownedResourceReturn->controlFlow;
+    std::string preownedFlowError;
+    const auto preownedFlow = moon::planRuntimeRefApplyFlow(
+        preownedGraph, preownedFlowError);
+    if (!preownedWitness.verify(preownedGraph, *tryApplyModule) ||
+        !preownedFlow)
+        return fail("preowned Result lost ownership flow");
+    std::optional<moon::CleanupId> preownedFailureCleanup;
+    const auto matchesPreownedCleanup = [&](moon::BlockId block) {
+        const auto* active = preownedWitness.activeCleanupsBeforeEdge(block);
+        if (!active || active->size() != 1) return false;
+        if (preownedFailureCleanup &&
+            *preownedFailureCleanup != active->front()) return false;
+        preownedFailureCleanup = active->front();
+        const auto* cleanup = preownedGraph.findCleanup(active->front());
+        const auto* local = cleanup
+            ? preownedGraph.findLocal(cleanup->place.root) : nullptr;
+        return cleanup && local && local->name == "resource" &&
+            cleanup->scope == preownedGraph.rootScope &&
+            cleanup->place.projections.empty() &&
+            cleanup->kind == moon::CleanupKind::Value &&
+            cleanup->action == luna::ownership::CleanupAction::Drop;
+    };
+    bool sawPreownedDerivation = false;
+    bool sawPreownedDispatch = false;
+    for (const auto& edge : preownedFlow->edges)
+        if (!edge.enters.empty()) {
+            sawPreownedDerivation = true;
+            if (!matchesPreownedCleanup(edge.source))
+                return fail("preowned Result lost its derivation cleanup");
+        }
+    for (const auto& block : preownedGraph.blocks)
+        if (block.terminator.kind == moon::TerminatorKind::RuntimeSlot) {
+            sawPreownedDispatch = true;
+            if (!matchesPreownedCleanup(block.id))
+                return fail("preowned Result lost its dispatch cleanup");
+        }
+    if (!sawPreownedDerivation || !sawPreownedDispatch)
+        return fail("preowned Result lost a failure boundary");
+    const auto preownedDropsBefore = privateRefJitAllDropProbeCalls;
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyPreownedResourceReturn,
+            privateRefJitError, 1, false, 1, false, false,
+            {1}, {}, std::pair<bool, int32_t>{false, 59}, 1,
+            false, false, false, nullptr, 0, false, std::nullopt,
+            false, false, std::nullopt, true, 1)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("preowned Result lost recoverable local cleanup");
+    }
+    if (privateRefJitAllDropProbeCalls != preownedDropsBefore + 4 ||
+        !privateRefJitDropProbeValid)
+        return fail("preowned Result did not Drop once on each path");
     if (!tryApplyOutlinedResourceReturn->controlFlow)
         return fail("outlined owned Result has no sealed CFG");
     moon::Verifier outlinedOwnedWitness;

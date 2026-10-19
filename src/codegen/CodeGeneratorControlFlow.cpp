@@ -668,6 +668,14 @@ void CodeGenerator::generateControlFlowBody(
                         mHelpers->i32Ty(),
                         LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1));
                 else if (privateResultStatus) {
+                    if (!mPrivateRefResultFailureCleanup.empty()) {
+                        const auto* cleanup = graph.findCleanup(
+                            mPrivateRefResultFailureCleanup);
+                        if (!cleanup)
+                            error("private Result derivation failure lost its cleanup");
+                        else
+                            emitCanonicalCleanup(*cleanup);
+                    }
                     mBuilder->CreateStore(llvm::ConstantInt::getSigned(
                         mHelpers->i32Ty(),
                         LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1),
@@ -1623,6 +1631,14 @@ void CodeGenerator::generateControlFlowBody(
                             mHelpers->i32Ty(),
                             LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1));
                     else if (privateResultStatus) {
+                        if (!mPrivateRefResultFailureCleanup.empty()) {
+                            const auto* cleanup = graph.findCleanup(
+                                mPrivateRefResultFailureCleanup);
+                            if (!cleanup)
+                                error("private Result dispatch failure lost its cleanup");
+                            else
+                                emitCanonicalCleanup(*cleanup);
+                        }
                         mBuilder->CreateStore(llvm::ConstantInt::getSigned(
                             mHelpers->i32Ty(),
                             LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1),

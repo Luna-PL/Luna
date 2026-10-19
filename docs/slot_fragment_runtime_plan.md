@@ -1830,14 +1830,15 @@ dispatch. A scalar Result outlined-return fixture also injects
 a Runtime dispatch failure, observes `-1` from the status body, then succeeds
 with the same borrowed Ref. An owned Result source can construct a live local
 owner before a derivation or dispatch failure, so the test-only status clone
-still rejects that shape. A narrower owned-Err source with one Slot is now
-admitted only when verified derivation and dispatch boundaries have no active
-cleanup and every outlined continuation block is an operation-free Jump with
-no edge cleanup. Its owner is constructed after dispatch returns. A probe
-forces failure after resume, observes `-1` without a returned-owner Drop, and
-then the regular transfer path succeeds with the same borrowed Ref. The owned
-transfer still calls the aggregate-only body; no public execution-failure
-status is claimed.
+admits only one proven root owner cleanup at both failure boundaries. It emits
+that canonical Drop on derivation and dispatch failure. A second bounded
+owned-Err shape has no active cleanup there and constructs its owner after
+dispatch returns. Both require one Slot and operation-free Jump-only outlined
+continuations with no edge cleanup. Probes cover null-context derivation and
+failure after resume, then normal transfer with the same borrowed Ref; the
+preexisting owner Drops once on each failed call and the later owner is never
+constructed on failure. The owned transfer still calls the aggregate-only body;
+no public execution-failure status is claimed.
 The verifier now reports active canonical cleanup rows at Jump and Slot
 boundaries. Tests distinguish a live owner before the first dispatch from an
 owner constructed only after dispatch. Broader callback return effects still
@@ -2613,20 +2614,24 @@ not a public ABI decision or stable-release approval:
    outlined Result fixture observes dispatch failure through that cell, then
    makes a successful call with the same Ref.
    The generated callback graph has a bounded topology and checked failure
-   returns. Owned Result status remains rejected when a local owner is active
-   at a failure boundary. The next broader slice must derive and prove active
-   owned-local cleanup for each recoverable failure edge. Dispatch can also
+   returns. One owned Result status shape now proves the same single root
+   cleanup row at Apply entry and Slot dispatch and emits that Drop on both
+   failure exits. The next broader slice must derive ordered cleanup for
+   multiple or path-varying active owners. Dispatch can also
    report failure after an outlined callback has moved an owner into return
    storage, so that state needs a separate uncommitted-owner cleanup path.
-   Prove both cases before connecting the status body to the transfer entry;
+   Prove those broader cases before connecting the status body to the transfer entry;
    then check untouched caller outputs before binding public v3 status `3`.
    The MoonIR ownership verifier now exposes read-only active cleanup rows at
    verified Jump and RuntimeSlot boundaries, after local operations and Slot
    argument evaluation. The dispatched owned-Err fixture has a live `input`
    cleanup at Apply entry and its first Slot, but none for that input after `?`
-   consumes it. A separate late-construction owned-Err fixture has no active
-   cleanup at derivation or Slot dispatch and passes the existing private owner
-   transfer/Drop path. Its test-only status clone is limited to one Slot and
+   consumes it. A preowned fixture retains the same root `resource` cleanup at
+   both failure boundaries; injected derivation and post-resume dispatch failures
+   each Drop it once, while successful calls transfer and Drop the returned owner.
+   A separate late-construction owned-Err fixture has no active cleanup at
+   derivation or Slot dispatch and passes the private owner transfer/Drop path.
+   These test-only status clones are limited to one Slot and
    operation-free, Jump-only outlined blocks with no edge cleanup. A handler
    that calls resume twice makes Runtime report failure after continuation;
    the clone returns `-1` and a subsequent normal call transfers and Drops the
