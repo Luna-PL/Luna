@@ -675,12 +675,16 @@ void CodeGenerator::generateControlFlowBody(
                         mHelpers->i32Ty(),
                         LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1));
                 else if (privateResultStatus) {
-                    for (const auto cleanupId : mPrivateRefResultFailureCleanups) {
-                        const auto* cleanup = graph.findCleanup(cleanupId);
-                        if (!cleanup)
-                            error("private Result derivation failure lost its cleanup");
-                        else
-                            emitCanonicalCleanup(*cleanup);
+                    if (source.value <
+                        mPrivateRefResultFailureCleanupsByBlock.size()) {
+                        for (const auto cleanupId :
+                             mPrivateRefResultFailureCleanupsByBlock[source.value]) {
+                            const auto* cleanup = graph.findCleanup(cleanupId);
+                            if (!cleanup)
+                                error("private Result derivation failure lost its cleanup");
+                            else
+                                emitCanonicalCleanup(*cleanup);
+                        }
                     }
                     mBuilder->CreateStore(llvm::ConstantInt::getSigned(
                         mHelpers->i32Ty(),
@@ -1637,12 +1641,17 @@ void CodeGenerator::generateControlFlowBody(
                             mHelpers->i32Ty(),
                             LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1));
                     else if (privateResultStatus) {
-                        for (const auto cleanupId : mPrivateRefResultFailureCleanups) {
-                            const auto* cleanup = graph.findCleanup(cleanupId);
-                            if (!cleanup)
-                                error("private Result dispatch failure lost its cleanup");
-                            else
-                                emitCanonicalCleanup(*cleanup);
+                        if (block.id.value <
+                            mPrivateRefResultFailureCleanupsByBlock.size()) {
+                            for (const auto cleanupId :
+                                 mPrivateRefResultFailureCleanupsByBlock[
+                                     block.id.value]) {
+                                const auto* cleanup = graph.findCleanup(cleanupId);
+                                if (!cleanup)
+                                    error("private Result dispatch failure lost its cleanup");
+                                else
+                                    emitCanonicalCleanup(*cleanup);
+                            }
                         }
                         mBuilder->CreateStore(llvm::ConstantInt::getSigned(
                             mHelpers->i32Ty(),

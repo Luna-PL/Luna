@@ -2503,7 +2503,7 @@ activation without partial publication, and a pinned call after teardown on
 Windows, Linux and macOS. Existing private probes cover parts of this matrix;
 they do not establish the public loader contract.
 
-### Next source Ref/apply gates (updated 2026-10-17)
+### Next source Ref/apply gates (updated 2026-10-19)
 
 This is the proposed implementation order for the remaining source feature,
 not a public ABI decision or stable-release approval:
@@ -2635,15 +2635,21 @@ not a public ABI decision or stable-release approval:
    An outlined scalar callback that creates and Drops its own resource also
    has no status clone despite an empty dispatch cleanup set.
    The generated callback graph has a bounded topology and checked failure
-   returns. Bounded owned Result status shapes now prove the same set of
-   distinct local cleanup rows at Apply entry and Slot dispatch, regardless of
-   whether each local has the Result error type, and emit those Drops in lexical
-   scope exit order on both failure exits. The next broader slice must derive
-   cleanup for path-varying active owners. Dispatch can also
-   report failure after an outlined callback has moved an owner into return
-   storage, so that state needs a separate uncommitted-owner cleanup path.
-   Prove those broader cases before connecting the status body to the transfer entry;
-   then check untouched caller outputs before binding public v3 status `3`.
+   returns. Bounded owned Result status shapes now derive cleanup independently
+   at Apply derivation and Slot dispatch, then emit each site's active Drop rows
+   in lexical scope exit order. A path-varying fixture owns both `source` and
+   `resource` at Apply entry; evaluating the Slot argument consumes `source`, so
+   only `resource` remains active at dispatch. Its private JIT probe drops both
+   locals on derivation failure, only the remaining resource on dispatch failure,
+   and preserves the returned owner on the successful transfer path. The sealed
+   ownership checker now checks Slot arguments so their moves update the active
+   cleanup snapshot before the dispatch boundary. Status clones remain test-only
+   and require exactly one Ref Apply, one Slot, and operation-free Jump-only
+   outlined blocks with no edge cleanup. The next proof must cover an outlined
+   callback that moves an owner into return storage before dispatch reports
+   failure; that uncommitted owner needs its own verified cleanup path. Keep the
+   public transfer and v3 status gates closed until that proof and untouched
+   caller-output checks are complete.
    The MoonIR ownership verifier now exposes read-only active cleanup rows at
    verified Jump and RuntimeSlot boundaries, after local operations and Slot
    argument evaluation. The dispatched owned-Err fixture has a live `input`
@@ -2662,7 +2668,7 @@ not a public ABI decision or stable-release approval:
    successful calls Drop `outer` and transfer `inner`.
    A separate late-construction owned-Err fixture has no active cleanup at
    derivation or Slot dispatch and passes the private owner transfer/Drop path.
-   These test-only status clones are limited to one Slot and
+   These test-only status clones are limited to one Ref Apply, one Slot and
    operation-free, Jump-only outlined blocks with no edge cleanup. A handler
    that calls resume twice makes Runtime report failure after continuation;
    the clone returns `-1` and a subsequent normal call transfers and Drops the

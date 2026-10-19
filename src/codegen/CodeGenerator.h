@@ -425,7 +425,8 @@ private:
     // Result return separate from a recoverable Ref-apply execution failure.
     bool mPrivateRefResultStatusBody = false;
     // Verified local owners to release on each bounded Result failure exit.
-    std::vector<moon::CleanupId> mPrivateRefResultFailureCleanups;
+    std::vector<std::vector<moon::CleanupId>>
+        mPrivateRefResultFailureCleanupsByBlock;
     bool mCurrentFunctionIsKernel = false;
     std::unordered_map<std::string, llvm::Function*> mFunctions;
     std::unordered_map<std::string, llvm::Function*> mDropCallbacks;

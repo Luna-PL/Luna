@@ -76,6 +76,8 @@ OwnershipChecker::FlowResult OwnershipChecker::checkBlock(BlockStmt* block) {
 }
 
 OwnershipChecker::FlowResult OwnershipChecker::checkSlotInvoke(SlotInvokeStmt* slot) {
+    for (auto& argument : slot->args)
+        if (!checkExpr(argument.get())) return {false, true};
     auto lookupApplied = [this](const std::string& name) -> FragmentDecl* {
         for (auto it = mApplyScopes.rbegin(); it != mApplyScopes.rend(); ++it) {
             auto found = it->find(name);

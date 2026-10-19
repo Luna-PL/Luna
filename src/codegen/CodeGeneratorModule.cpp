@@ -83,7 +83,7 @@ bool matchesPrivateRefContextEffect(
 // owned Result status clone only when the outlined continuation cannot write
 // an owner into the inherited return cell or leave a live local behind.
 struct PrivateOwnedResultStatusPlan {
-    std::vector<moon::CleanupId> failureCleanups;
+    std::vector<std::vector<moon::CleanupId>> failureCleanupsByBlock;
 };
 
 std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
@@ -98,13 +98,13 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
     const auto* result = program.findType(function.returnType);
     if (!result || result->typeArgumentIds.size() != 2)
         return std::nullopt;
-    std::optional<std::vector<moon::CleanupId>> failureCleanups;
-    std::optional<std::vector<moon::CleanupId>> orderedFailureCleanups;
+    PrivateOwnedResultStatusPlan plan;
+    plan.failureCleanupsByBlock.resize(graph->blocks.size());
     const auto matchFailureCleanups = [&](moon::BlockId block) {
         const auto* source = graph->findBlock(block);
         const auto* active = verifier.activeCleanupsBeforeEdge(block);
         if (!source || !active ||
-            (failureCleanups && *failureCleanups != *active))
+            block.value >= plan.failureCleanupsByBlock.size())
             return false;
         std::unordered_set<uint32_t> roots;
         std::unordered_set<uint32_t> activeIds;
@@ -135,11 +135,9 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
                 break;
             }
         }
-        if (!reachedRoot || ordered.size() != active->size() ||
-            (orderedFailureCleanups && *orderedFailureCleanups != ordered))
+        if (!reachedRoot || ordered.size() != active->size())
             return false;
-        failureCleanups = *active;
-        orderedFailureCleanups = std::move(ordered);
+        plan.failureCleanupsByBlock[block.value] = std::move(ordered);
         return true;
     };
     size_t slotCount = 0;
@@ -165,8 +163,10 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
         }
     }
     if (slotCount != 1) return std::nullopt;
+    size_t derivationCount = 0;
     for (const auto& edge : flow->edges)
         if (!edge.enters.empty()) {
+            ++derivationCount;
             const auto* source = graph->findBlock(edge.source);
             if (!source || source->terminator.kind !=
                     moon::TerminatorKind::Jump ||
@@ -174,8 +174,8 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
                 !matchFailureCleanups(edge.source))
                 return std::nullopt;
         }
-    if (!orderedFailureCleanups) return std::nullopt;
-    return PrivateOwnedResultStatusPlan{std::move(*orderedFailureCleanups)};
+    if (derivationCount != 1) return std::nullopt;
+    return plan;
 }
 
 // A scalar Result can still leave an unrelated resource live on failure.
@@ -2270,12 +2270,12 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     *proof.mModule);
                 proof.mFunctions[function.generatedSymbolName] = statusBody;
                 proof.mPrivateRefResultStatusBody = true;
-                proof.mPrivateRefResultFailureCleanups = ownedStatusPlan
-                    ? ownedStatusPlan->failureCleanups
-                    : std::vector<moon::CleanupId>{};
+                proof.mPrivateRefResultFailureCleanupsByBlock = ownedStatusPlan
+                    ? ownedStatusPlan->failureCleanupsByBlock
+                    : std::vector<std::vector<moon::CleanupId>>{};
                 proof.generateFunctionBody(&function);
                 proof.mPrivateRefResultStatusBody = false;
-                proof.mPrivateRefResultFailureCleanups.clear();
+                proof.mPrivateRefResultFailureCleanupsByBlock.clear();
                 proof.mFunctions[function.generatedSymbolName] = body;
                 if (!proof.mErrors.empty() || statusBody->empty() ||
                     statusBody->arg_size() != 3) {

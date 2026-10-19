@@ -1797,7 +1797,7 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
 以及 Windows、Linux、macOS 上销毁 loader 与 Runtime 后的固定调用。已有私有探针
 覆盖其中一部分，但不能代替公开 loader 契约。
 
-### 下一步源码 Ref／apply 完成门（更新于 2026-10-17）
+### 下一步源码 Ref／apply 完成门（更新于 2026-10-19）
 
 以下是剩余源码功能的建议实施顺序，不是公开 ABI 决议或稳定版发布批准：
 
@@ -1877,8 +1877,15 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    pin 失效后单独保留 JIT lease，以及三层
    链的显式恰好一次 Drop。
    注入的 body 返回后失败现证明未提交 owner 的清理；公开宿主所有权 carrier 与
-   生产失败状态仍需契约及可执行证明。发布可返回失败的
-   路径前，须明确可恢复的派生／分派失败清理。
+   生产失败状态仍需契约及可执行证明。仅测试用的拥有型 Result 状态副本现会按失败
+   边界分别推导 active cleanup：一个夹具在 Apply 派生失败点同时持有 `source` 和
+   `resource`；计算 Slot 参数时 move 并消费 `source`，所以 Slot 分派失败点只清理
+   尚存的 `resource`。JIT 精确验证派生失败 Drop 两者、分派失败只 Drop 剩余资源，
+   成功路径则按既有协议提交返回 owner。源码所有权检查现会检查 Slot 参数表达式，
+   因而参数求值后的 move 会进入密封 CFG 的清理快照。这仍只是私有证明：状态副本
+   限于一个 Ref Apply、一个 Slot、无操作且仅 Jump 的 outlined block、无 edge cleanup。
+   下一项需证明 outlined callback 已把 owner 移入返回暂存后 Runtime 才报告分派失败时，
+   如何安全清理尚未提交的 owner；公开宿主转移和 v3 失败状态仍保持关闭。
    每条准入的出口都须在 apply 局部清理之后、借用的
    Ref owner Drop 之前，按内到外恰好一次释放有效 context；其余路径继续拒绝。
    Windows LLVM 20.1.8 的 RuntimeDyld COFF 重定位故障现也在 LLVM 22 ASan

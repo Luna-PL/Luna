@@ -301,8 +301,9 @@ bool exercisePrivateRefApplyJit(
     std::optional<std::pair<int32_t, unsigned>> injectedDispatchFailure =
         std::nullopt,
     bool exerciseStatusDispatchFailure = false,
-    unsigned statusFailureDropCalls = 0,
-    bool expectNoStatusBody = false) {
+    unsigned dispatchFailureDropCalls = 0,
+    bool expectNoStatusBody = false,
+    std::optional<unsigned> derivationFailureDropCalls = std::nullopt) {
     const moon::SlotDecl* slot = nullptr;
     const moon::SlotDecl* secondSlot = nullptr;
     for (const auto& declaration : module.declarations)
@@ -413,7 +414,8 @@ bool exercisePrivateRefApplyJit(
                 LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
             privateRefJitExecutions != dispatchesBeforeProbe ||
             privateRefJitAllDropProbeCalls !=
-                dropsBeforeProbe + statusFailureDropCalls) {
+                dropsBeforeProbe + derivationFailureDropCalls.value_or(
+                    dispatchFailureDropCalls)) {
             error = "private Result status body did not recover from derivation failure";
             return false;
         }
@@ -1215,7 +1217,7 @@ bool exercisePrivateRefApplyJit(
             privateRefJitExecutions != before +
                 (transferredDropCalls ? 1u : 2u) ||
             privateRefJitAllDropProbeCalls !=
-                dropsBefore + statusFailureDropCalls ||
+                dropsBefore + dispatchFailureDropCalls ||
             luna_runtime_fragment_ref_check_v1(
                 handle.opaque(), slot->symbolId.value.c_str(),
                 slot->contractId.value.c_str()) !=
@@ -4236,6 +4238,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "    resource.marker = 0;\n"
         "  }\n"
         "}\n"
+        "fn consume_source_marker(affine source: SourceError) -> i32 {\n"
+        "  free(source);\n"
+        "  return 47;\n"
+        "}\n"
         "impl From<SourceError> for ReturnedResource {\n"
         "  fn from(affine error: SourceError) -> ReturnedResource {\n"
         "    let returned = new ReturnedResource(error.marker + 12);\n"
@@ -4590,6 +4596,17 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "  }\n"
         "  return Ok(0);\n"
         "}\n"
+        "runtime fn try_apply_path_varying_failure_cleanup("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, ReturnedResource> {\n"
+        "  let resource = new ReturnedResource(67);\n"
+        "  let source = new SourceError(47);\n"
+        "  apply selected {\n"
+        "    checkpoint(consume_source_marker(move source)) {}\n"
+        "  }\n"
+        "  let returned = new ReturnedResource(59);\n"
+        "  return Err::<i32, ReturnedResource>(move returned);\n"
+        "}\n"
         "runtime fn try_apply_scalar_preowned("
             "selected: RuntimeFragmentRef<checkpoint>) "
             "-> Result<i32, i32> {\n"
@@ -4803,6 +4820,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* tryApplyTwoPreownedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyMixedPreownedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyNestedPreownedResourceReturn = nullptr;
+    moon::FunctionDecl* tryApplyPathVaryingFailureCleanup = nullptr;
     moon::FunctionDecl* tryApplyScalarPreowned = nullptr;
     moon::FunctionDecl* tryApplyScalarOutlinedOwner = nullptr;
     moon::FunctionDecl* tryApplyOutlinedResourceReturn = nullptr;
@@ -4860,6 +4878,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 tryApplyMixedPreownedResourceReturn = function;
             if (function->name == "try_apply_nested_preowned_resource_return")
                 tryApplyNestedPreownedResourceReturn = function;
+            if (function->name == "try_apply_path_varying_failure_cleanup")
+                tryApplyPathVaryingFailureCleanup = function;
             if (function->name == "try_apply_scalar_preowned")
                 tryApplyScalarPreowned = function;
             if (function->name == "try_apply_scalar_outlined_owner")
@@ -4900,6 +4920,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !tryApplyTwoPreownedResourceReturn ||
         !tryApplyMixedPreownedResourceReturn ||
         !tryApplyNestedPreownedResourceReturn ||
+        !tryApplyPathVaryingFailureCleanup ||
         !tryApplyScalarPreowned || !tryApplyScalarOutlinedOwner ||
         !tryApplyOutlinedResourceReturn ||
         !tryApplyFromResourceReturn ||
@@ -7331,6 +7352,88 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             std::vector<int32_t>{59, 67, 59, 67, 67, 59, 67, 59} ||
         !privateRefJitDropProbeValid)
         return fail("nested-owner Result lost lexical Drop order");
+    if (!tryApplyPathVaryingFailureCleanup->controlFlow)
+        return fail("path-varying Result has no sealed CFG");
+    moon::Verifier pathVaryingWitness;
+    const auto& pathVaryingGraph =
+        *tryApplyPathVaryingFailureCleanup->controlFlow;
+    std::string pathVaryingFlowError;
+    const auto pathVaryingFlow = moon::planRuntimeRefApplyFlow(
+        pathVaryingGraph, pathVaryingFlowError);
+    if (!pathVaryingWitness.verify(pathVaryingGraph, *tryApplyModule) ||
+        !pathVaryingFlow)
+        return fail("path-varying Result lost ownership flow");
+    const auto pathVaryingSourceLocal = std::find_if(
+        pathVaryingGraph.locals.begin(), pathVaryingGraph.locals.end(),
+        [](const auto& local) { return local.name == "source"; });
+    const auto pathVaryingResourceLocal = std::find_if(
+        pathVaryingGraph.locals.begin(), pathVaryingGraph.locals.end(),
+        [](const auto& local) { return local.name == "resource"; });
+    if (pathVaryingSourceLocal == pathVaryingGraph.locals.end() ||
+        pathVaryingResourceLocal == pathVaryingGraph.locals.end())
+        return fail("path-varying Result lost its preowned locals");
+    bool sawPathVaryingDerivation = false;
+    bool sawPathVaryingDispatch = false;
+    for (const auto& edge : pathVaryingFlow->edges)
+        if (!edge.enters.empty()) {
+            sawPathVaryingDerivation = true;
+            const auto* active = pathVaryingWitness.activeCleanupsBeforeEdge(
+                edge.source);
+            if (!active || !std::any_of(
+                    active->begin(), active->end(), [&](auto cleanupId) {
+                        const auto* cleanup =
+                            pathVaryingGraph.findCleanup(cleanupId);
+                        return cleanup &&
+                            cleanup->place.root == pathVaryingSourceLocal->id;
+                    }) || !std::any_of(
+                    active->begin(), active->end(), [&](auto cleanupId) {
+                        const auto* cleanup =
+                            pathVaryingGraph.findCleanup(cleanupId);
+                        return cleanup &&
+                            cleanup->place.root == pathVaryingResourceLocal->id;
+                    }))
+                return fail("path-varying Result lost derivation cleanup");
+        }
+    for (const auto& block : pathVaryingGraph.blocks)
+        if (block.terminator.kind == moon::TerminatorKind::RuntimeSlot) {
+            sawPathVaryingDispatch = true;
+            const auto* active = pathVaryingWitness.activeCleanupsBeforeEdge(
+                block.id);
+            if (!active || std::any_of(
+                    active->begin(), active->end(), [&](auto cleanupId) {
+                        const auto* cleanup =
+                            pathVaryingGraph.findCleanup(cleanupId);
+                        return cleanup &&
+                            cleanup->place.root == pathVaryingSourceLocal->id;
+                    }) || !std::any_of(
+                    active->begin(), active->end(), [&](auto cleanupId) {
+                        const auto* cleanup =
+                            pathVaryingGraph.findCleanup(cleanupId);
+                        return cleanup &&
+                            cleanup->place.root == pathVaryingResourceLocal->id;
+                    }))
+                return fail("path-varying Result lost its surviving dispatch cleanup");
+        }
+    if (!sawPathVaryingDerivation || !sawPathVaryingDispatch)
+        return fail("path-varying Result lost a failure boundary");
+    privateRefJitRootDropOrder.clear();
+    const auto pathVaryingDropsBefore =
+        privateRefJitAllDropProbeCalls;
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyPathVaryingFailureCleanup,
+            privateRefJitError, 1, false, 1, false, false,
+            {0}, {}, std::pair<bool, int32_t>{false, 59}, 1,
+            false, false, false, nullptr, 1, false, std::nullopt,
+            false, false, std::nullopt, true, 1, false, 2)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("path-varying Result lost recoverable cleanup");
+    }
+    if (privateRefJitAllDropProbeCalls != pathVaryingDropsBefore + 7 ||
+        privateRefJitRootDropOrder != std::vector<int32_t>{
+            47, 67, 67, 67, 59, 67, 59} ||
+        !privateRefJitDropProbeValid)
+        return fail("path-varying Result lost exact cleanup ownership");
     if (!tryApplyScalarPreowned->controlFlow)
         return fail("scalar preowned Result has no sealed CFG");
     moon::Verifier scalarPreownedWitness;
