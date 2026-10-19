@@ -424,7 +424,7 @@ private:
     // Test-only Result body with a trailing status cell. It keeps the source
     // Result return separate from a recoverable Ref-apply execution failure.
     bool mPrivateRefResultStatusBody = false;
-    // Verified root owners to release on each bounded Result failure exit.
+    // Verified local owners to release on each bounded Result failure exit.
     std::vector<moon::CleanupId> mPrivateRefResultFailureCleanups;
     bool mCurrentFunctionIsKernel = false;
     std::unordered_map<std::string, llvm::Function*> mFunctions;

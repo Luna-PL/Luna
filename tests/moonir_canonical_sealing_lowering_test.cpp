@@ -4579,6 +4579,17 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "  apply selected { checkpoint(1) {} }\n"
         "  return Err::<i32, ReturnedResource>(move second);\n"
         "}\n"
+        "runtime fn try_apply_nested_preowned_resource_return("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, ReturnedResource> {\n"
+        "  let outer = new ReturnedResource(67);\n"
+        "  if true {\n"
+        "    let inner = new ReturnedResource(59);\n"
+        "    apply selected { checkpoint(1) {} }\n"
+        "    return Err::<i32, ReturnedResource>(move inner);\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
         "runtime fn try_apply_scalar_preowned("
             "selected: RuntimeFragmentRef<checkpoint>) "
             "-> Result<i32, i32> {\n"
@@ -4791,6 +4802,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* tryApplyPreownedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyTwoPreownedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyMixedPreownedResourceReturn = nullptr;
+    moon::FunctionDecl* tryApplyNestedPreownedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyScalarPreowned = nullptr;
     moon::FunctionDecl* tryApplyScalarOutlinedOwner = nullptr;
     moon::FunctionDecl* tryApplyOutlinedResourceReturn = nullptr;
@@ -4846,6 +4858,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 tryApplyTwoPreownedResourceReturn = function;
             if (function->name == "try_apply_mixed_preowned_resource_return")
                 tryApplyMixedPreownedResourceReturn = function;
+            if (function->name == "try_apply_nested_preowned_resource_return")
+                tryApplyNestedPreownedResourceReturn = function;
             if (function->name == "try_apply_scalar_preowned")
                 tryApplyScalarPreowned = function;
             if (function->name == "try_apply_scalar_outlined_owner")
@@ -4885,6 +4899,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !tryApplyLateResourceReturn || !tryApplyPreownedResourceReturn ||
         !tryApplyTwoPreownedResourceReturn ||
         !tryApplyMixedPreownedResourceReturn ||
+        !tryApplyNestedPreownedResourceReturn ||
         !tryApplyScalarPreowned || !tryApplyScalarOutlinedOwner ||
         !tryApplyOutlinedResourceReturn ||
         !tryApplyFromResourceReturn ||
@@ -7245,6 +7260,77 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             59, 67, 47, 59, 67, 47, 67, 47, 59, 67, 47, 59} ||
         !privateRefJitDropProbeValid)
         return fail("mixed-owner Result lost canonical Drop order");
+    if (!tryApplyNestedPreownedResourceReturn->controlFlow)
+        return fail("nested-owner Result has no sealed CFG");
+    moon::Verifier nestedOwnerWitness;
+    const auto& nestedOwnerGraph =
+        *tryApplyNestedPreownedResourceReturn->controlFlow;
+    std::string nestedOwnerFlowError;
+    const auto nestedOwnerFlow = moon::planRuntimeRefApplyFlow(
+        nestedOwnerGraph, nestedOwnerFlowError);
+    if (!nestedOwnerWitness.verify(nestedOwnerGraph, *tryApplyModule) ||
+        !nestedOwnerFlow)
+        return fail("nested-owner Result lost ownership flow");
+    std::optional<std::vector<moon::CleanupId>> nestedOwnerActive;
+    const auto matchesNestedOwners = [&](moon::BlockId block) {
+        const auto* active = nestedOwnerWitness.activeCleanupsBeforeEdge(block);
+        if (!active || active->size() != 2 ||
+            (nestedOwnerActive && *nestedOwnerActive != *active))
+            return false;
+        nestedOwnerActive = *active;
+        bool sawOuter = false;
+        bool sawInner = false;
+        for (const auto id : *active) {
+            const auto* cleanup = nestedOwnerGraph.findCleanup(id);
+            const auto* local = cleanup
+                ? nestedOwnerGraph.findLocal(cleanup->place.root) : nullptr;
+            if (!cleanup || !local || cleanup->scope != local->scope ||
+                !cleanup->place.projections.empty() ||
+                cleanup->kind != moon::CleanupKind::Value ||
+                cleanup->action != luna::ownership::CleanupAction::Drop)
+                return false;
+            if (local->name == "outer" &&
+                local->scope == nestedOwnerGraph.rootScope)
+                sawOuter = true;
+            if (local->name == "inner" &&
+                local->scope != nestedOwnerGraph.rootScope)
+                sawInner = true;
+        }
+        return sawOuter && sawInner;
+    };
+    bool sawNestedOwnerDerivation = false;
+    bool sawNestedOwnerDispatch = false;
+    for (const auto& edge : nestedOwnerFlow->edges)
+        if (!edge.enters.empty()) {
+            sawNestedOwnerDerivation = true;
+            if (!matchesNestedOwners(edge.source))
+                return fail("nested-owner Result lost derivation cleanups");
+        }
+    for (const auto& block : nestedOwnerGraph.blocks)
+        if (block.terminator.kind == moon::TerminatorKind::RuntimeSlot) {
+            sawNestedOwnerDispatch = true;
+            if (!matchesNestedOwners(block.id))
+                return fail("nested-owner Result lost dispatch cleanups");
+        }
+    if (!sawNestedOwnerDerivation || !sawNestedOwnerDispatch)
+        return fail("nested-owner Result lost a failure boundary");
+    privateRefJitRootDropOrder.clear();
+    const auto nestedOwnerDropsBefore = privateRefJitAllDropProbeCalls;
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyNestedPreownedResourceReturn,
+            privateRefJitError, 1, false, 1, false, false,
+            {1}, {}, std::pair<bool, int32_t>{false, 59}, 1,
+            false, false, false, nullptr, 1, false, std::nullopt,
+            false, false, std::nullopt, true, 2)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("nested-owner Result lost recoverable cleanup");
+    }
+    if (privateRefJitAllDropProbeCalls != nestedOwnerDropsBefore + 8 ||
+        privateRefJitRootDropOrder !=
+            std::vector<int32_t>{59, 67, 59, 67, 67, 59, 67, 59} ||
+        !privateRefJitDropProbeValid)
+        return fail("nested-owner Result lost lexical Drop order");
     if (!tryApplyScalarPreowned->controlFlow)
         return fail("scalar preowned Result has no sealed CFG");
     moon::Verifier scalarPreownedWitness;

@@ -418,9 +418,16 @@ void CodeGenerator::generateControlFlowBody(
                 return;
             }
             if (index == 0) {
-                if (apply->parent != graph.rootRegion) {
-                    error("private Ref apply body requires a top-level region");
-                    return;
+                for (auto ancestor = apply->parent;
+                     ancestor != graph.rootRegion;) {
+                    const auto* enclosing = graph.findRegion(ancestor);
+                    if (!enclosing ||
+                        enclosing->kind != moon::RegionKind::Lexical ||
+                        enclosing->parent.empty()) {
+                        error("private Ref apply body requires lexical ancestors");
+                        return;
+                    }
+                    ancestor = enclosing->parent;
                 }
             } else {
                 bool insidePrevious = false;

@@ -99,25 +99,47 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
     if (!result || result->typeArgumentIds.size() != 2)
         return std::nullopt;
     std::optional<std::vector<moon::CleanupId>> failureCleanups;
+    std::optional<std::vector<moon::CleanupId>> orderedFailureCleanups;
     const auto matchFailureCleanups = [&](moon::BlockId block) {
+        const auto* source = graph->findBlock(block);
         const auto* active = verifier.activeCleanupsBeforeEdge(block);
-        if (!active || (failureCleanups && *failureCleanups != *active))
+        if (!source || !active ||
+            (failureCleanups && *failureCleanups != *active))
             return false;
-        failureCleanups = *active;
         std::unordered_set<uint32_t> roots;
+        std::unordered_set<uint32_t> activeIds;
         for (const auto id : *active) {
             const auto* cleanup = graph->findCleanup(id);
             const auto* local = cleanup
                 ? graph->findLocal(cleanup->place.root) : nullptr;
             if (!cleanup || !local ||
-                cleanup->scope != graph->rootScope ||
-                local->scope != graph->rootScope ||
+                cleanup->scope != local->scope ||
                 !cleanup->place.projections.empty() ||
                 cleanup->kind != moon::CleanupKind::Value ||
                 cleanup->action != luna::ownership::CleanupAction::Drop ||
-                !roots.insert(cleanup->place.root.value).second)
+                !roots.insert(cleanup->place.root.value).second ||
+                !activeIds.insert(id.value).second)
                 return false;
         }
+        std::vector<moon::CleanupId> ordered;
+        std::unordered_set<uint32_t> visitedScopes;
+        bool reachedRoot = false;
+        for (const auto* scope = graph->findScope(source->scope); scope;
+             scope = graph->findScope(scope->parent)) {
+            if (!visitedScopes.insert(scope->id.value).second) return false;
+            for (auto row = scope->cleanups.rbegin();
+                 row != scope->cleanups.rend(); ++row)
+                if (activeIds.count(row->value)) ordered.push_back(*row);
+            if (scope->id == graph->rootScope) {
+                reachedRoot = true;
+                break;
+            }
+        }
+        if (!reachedRoot || ordered.size() != active->size() ||
+            (orderedFailureCleanups && *orderedFailureCleanups != ordered))
+            return false;
+        failureCleanups = *active;
+        orderedFailureCleanups = std::move(ordered);
         return true;
     };
     size_t slotCount = 0;
@@ -152,16 +174,8 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
                 !matchFailureCleanups(edge.source))
                 return std::nullopt;
         }
-    if (!failureCleanups) return std::nullopt;
-    const auto* root = graph->findScope(graph->rootScope);
-    if (!root) return std::nullopt;
-    std::vector<moon::CleanupId> ordered;
-    for (auto row = root->cleanups.rbegin(); row != root->cleanups.rend(); ++row)
-        if (std::find(failureCleanups->begin(), failureCleanups->end(), *row) !=
-            failureCleanups->end())
-            ordered.push_back(*row);
-    if (ordered.size() != failureCleanups->size()) return std::nullopt;
-    return PrivateOwnedResultStatusPlan{std::move(ordered)};
+    if (!orderedFailureCleanups) return std::nullopt;
+    return PrivateOwnedResultStatusPlan{std::move(*orderedFailureCleanups)};
 }
 
 // A scalar Result can still leave an unrelated resource live on failure.
@@ -1212,9 +1226,17 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 return false;
             }
             if (index == 0) {
-                if (region->parent != function.controlFlow->rootRegion) {
-                    failure = "outer Ref apply region is not at the function root";
-                    return false;
+                for (auto ancestor = region->parent;
+                     ancestor != function.controlFlow->rootRegion;) {
+                    const auto* enclosing =
+                        function.controlFlow->findRegion(ancestor);
+                    if (!enclosing ||
+                        enclosing->kind != moon::RegionKind::Lexical ||
+                        enclosing->parent.empty()) {
+                        failure = "outer Ref apply has non-lexical ancestors";
+                        return false;
+                    }
+                    ancestor = enclosing->parent;
                 }
             } else {
                 bool nested = false;
@@ -2233,7 +2255,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 privateScalarResultStatusCandidate(program, function);
             if (function.params.size() == 1 &&
                 (scalarStatusCandidate || ownedStatusPlan)) {
-                // The bounded owned Result clone releases its proven root
+                // The bounded owned Result clone releases its proven local
                 // owners when derivation or dispatch reports failure.
                 // A trailing cell separates failure from the Result tag.
                 std::vector<llvm::Type*> statusParameters(

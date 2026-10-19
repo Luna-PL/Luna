@@ -700,13 +700,14 @@ closed; no stable ABI or wire format is changed. The private bridge symbols are
 registered in the explicit JIT runtime symbol map, but no publishable source
 module references them yet.
 
-### Private one- or two-region source Ref-apply body (updated 2026-10-04)
+### Private one- or two-region source Ref-apply body (updated 2026-10-19)
 
 A disposable CodeGenerator can now lower the **actual canonical source body**
-for one top-level Ref apply and optionally one nested Apply that borrows the
-same local Ref or a second borrowed Ref for the same or a different exact Slot.
-Each region has one owned context cell. The private proof checks each derivation against
-its own parameter carrier and exact Slot/Contract constants. Jump
+for one Ref apply under the function root or lexical regions, and optionally
+one nested Apply that borrows the same local Ref or a second borrowed Ref for
+the same or a different exact Slot. Each region has one owned context cell.
+The private proof checks each derivation against its own parameter carrier
+and exact Slot/Contract constants. Jump
 entry derives from the current parent; Jump exits and returns run cleanup and
 Drop each active cell in inner-to-outer order, before the borrowed Ref owner
 is released. The private proof maps every CFG entry/exit obligation to the
@@ -1836,9 +1837,10 @@ its dispatch boundary is empty and normal callback Drop succeeds, but the
 status clone is still absent.
 An owned Result source can construct live local owners before a derivation
 or dispatch failure. The test-only status clone admits the same verified set
-of distinct root owner cleanups at both failure boundaries, including owners
+of distinct local owner cleanups at both failure boundaries, including owners
 of types other than the Result error type. It emits their canonical Drops in
-reverse root-scope registration order. A second bounded owned-Err shape has
+innermost-to-outermost scope order and reverse registration order within each
+scope. A second bounded owned-Err shape has
 no active cleanup there and constructs its owner after
 dispatch returns. Both require one Slot and operation-free Jump-only outlined
 continuations with no edge cleanup. Probes cover null-context derivation and
@@ -1850,6 +1852,9 @@ owner plus transfer of the returned owner. The owned transfer still calls the
 aggregate-only body; no public execution-failure status is claimed.
 Another fixture retains three owners of two resource types and verifies the
 same failure ordering and successful transfer.
+A lexical-scope fixture keeps one owner outside an `if` branch and another
+inside it. Both failure exits Drop the inner owner before the outer owner;
+successful return transfers the inner owner and Drops the outer owner.
 The verifier now reports active canonical cleanup rows at Jump and Slot
 boundaries. Tests distinguish a live owner before the first dispatch from an
 owner constructed only after dispatch. Broader callback return effects still
@@ -2631,10 +2636,10 @@ not a public ABI decision or stable-release approval:
    has no status clone despite an empty dispatch cleanup set.
    The generated callback graph has a bounded topology and checked failure
    returns. Bounded owned Result status shapes now prove the same set of
-   distinct root cleanup rows at Apply entry and Slot dispatch, regardless of
-   whether each local has the Result error type, and emit those Drops in reverse
-   registration order on both failure exits. The next broader slice must derive
-   cleanup for path-varying active owners or nested scopes. Dispatch can also
+   distinct local cleanup rows at Apply entry and Slot dispatch, regardless of
+   whether each local has the Result error type, and emit those Drops in lexical
+   scope exit order on both failure exits. The next broader slice must derive
+   cleanup for path-varying active owners. Dispatch can also
    report failure after an outlined callback has moved an owner into return
    storage, so that state needs a separate uncommitted-owner cleanup path.
    Prove those broader cases before connecting the status body to the transfer entry;
@@ -2652,6 +2657,9 @@ not a public ABI decision or stable-release approval:
    A mixed-type three-owner fixture adds a `SourceError` local before those
    two owners. Injected failures Drop `second`, `first`, then `source`;
    successful calls Drop `first` and `source` before transferring `second`.
+   A lexical-scope fixture keeps `outer` at the function root and `inner`
+   inside an `if` branch. Injected failures Drop `inner` then `outer`;
+   successful calls Drop `outer` and transfer `inner`.
    A separate late-construction owned-Err fixture has no active cleanup at
    derivation or Slot dispatch and passes the private owner transfer/Drop path.
    These test-only status clones are limited to one Slot and
