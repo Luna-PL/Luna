@@ -83,7 +83,7 @@ bool matchesPrivateRefContextEffect(
 // owned Result status clone only when the outlined continuation cannot write
 // an owner into the inherited return cell or leave a live local behind.
 struct PrivateOwnedResultStatusPlan {
-    moon::CleanupId failureCleanup;
+    std::vector<moon::CleanupId> failureCleanups;
 };
 
 std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
@@ -99,24 +99,29 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
     if (!result || result->typeArgumentIds.size() != 2)
         return std::nullopt;
     const auto errorType = result->typeArgumentIds[1];
-    std::optional<moon::CleanupId> failureCleanup;
+    std::optional<std::vector<moon::CleanupId>> failureCleanups;
     const auto matchFailureCleanups = [&](moon::BlockId block) {
         const auto* active = verifier.activeCleanupsBeforeEdge(block);
-        if (!active || active->size() > 1) return false;
-        const auto candidate = active->empty()
-            ? moon::CleanupId{} : active->front();
-        if (failureCleanup && *failureCleanup != candidate) return false;
-        failureCleanup = candidate;
-        if (candidate.empty()) return true;
-        const auto* cleanup = graph->findCleanup(candidate);
-        const auto* local = cleanup
-            ? graph->findLocal(cleanup->place.root) : nullptr;
-        return cleanup && local && cleanup->scope == graph->rootScope &&
-            local->scope == graph->rootScope &&
-            cleanup->place.projections.empty() &&
-            cleanup->kind == moon::CleanupKind::Value &&
-            cleanup->action == luna::ownership::CleanupAction::Drop &&
-            cleanup->type == errorType;
+        if (!active || active->size() > 2 ||
+            (failureCleanups && *failureCleanups != *active))
+            return false;
+        failureCleanups = *active;
+        std::unordered_set<uint32_t> roots;
+        for (const auto id : *active) {
+            const auto* cleanup = graph->findCleanup(id);
+            const auto* local = cleanup
+                ? graph->findLocal(cleanup->place.root) : nullptr;
+            if (!cleanup || !local ||
+                cleanup->scope != graph->rootScope ||
+                local->scope != graph->rootScope ||
+                !cleanup->place.projections.empty() ||
+                cleanup->kind != moon::CleanupKind::Value ||
+                cleanup->action != luna::ownership::CleanupAction::Drop ||
+                cleanup->type != errorType ||
+                !roots.insert(cleanup->place.root.value).second)
+                return false;
+        }
+        return true;
     };
     size_t slotCount = 0;
     for (const auto& block : graph->blocks) {
@@ -150,8 +155,16 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
                 !matchFailureCleanups(edge.source))
                 return std::nullopt;
         }
-    if (!failureCleanup) return std::nullopt;
-    return PrivateOwnedResultStatusPlan{*failureCleanup};
+    if (!failureCleanups) return std::nullopt;
+    const auto* root = graph->findScope(graph->rootScope);
+    if (!root) return std::nullopt;
+    std::vector<moon::CleanupId> ordered;
+    for (auto row = root->cleanups.rbegin(); row != root->cleanups.rend(); ++row)
+        if (std::find(failureCleanups->begin(), failureCleanups->end(), *row) !=
+            failureCleanups->end())
+            ordered.push_back(*row);
+    if (ordered.size() != failureCleanups->size()) return std::nullopt;
+    return PrivateOwnedResultStatusPlan{std::move(ordered)};
 }
 
 // A scalar Result can still leave an unrelated resource live on failure.
@@ -2223,8 +2236,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 privateScalarResultStatusCandidate(program, function);
             if (function.params.size() == 1 &&
                 (scalarStatusCandidate || ownedStatusPlan)) {
-                // The bounded owned Result clone releases its one proven
-                // root owner when derivation or dispatch reports failure.
+                // The bounded owned Result clone releases its proven root
+                // owners when derivation or dispatch reports failure.
                 // A trailing cell separates failure from the Result tag.
                 std::vector<llvm::Type*> statusParameters(
                     body->getFunctionType()->params().begin(),
@@ -2238,11 +2251,12 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     *proof.mModule);
                 proof.mFunctions[function.generatedSymbolName] = statusBody;
                 proof.mPrivateRefResultStatusBody = true;
-                proof.mPrivateRefResultFailureCleanup = ownedStatusPlan
-                    ? ownedStatusPlan->failureCleanup : moon::CleanupId{};
+                proof.mPrivateRefResultFailureCleanups = ownedStatusPlan
+                    ? ownedStatusPlan->failureCleanups
+                    : std::vector<moon::CleanupId>{};
                 proof.generateFunctionBody(&function);
                 proof.mPrivateRefResultStatusBody = false;
-                proof.mPrivateRefResultFailureCleanup = {};
+                proof.mPrivateRefResultFailureCleanups.clear();
                 proof.mFunctions[function.generatedSymbolName] = body;
                 if (!proof.mErrors.empty() || statusBody->empty() ||
                     statusBody->arg_size() != 3) {

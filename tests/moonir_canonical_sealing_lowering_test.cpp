@@ -41,6 +41,7 @@ static std::vector<int32_t> privateRefJitConversionDropOrder;
 static std::vector<int32_t> privateRefJitFromResourceDropOrder;
 static std::vector<int32_t> privateRefJitFromBranchMarkers;
 static std::vector<int32_t> privateRefJitNestedDropOrder;
+static std::vector<int32_t> privateRefJitRootDropOrder;
 static bool privateRefJitDropProbeValid = true;
 
 extern "C" void luna_private_ref_drop_probe(int32_t marker) {
@@ -58,8 +59,12 @@ extern "C" void luna_private_ref_drop_probe(int32_t marker) {
     } else if (marker == 59) {
         ++privateRefJitReturnedDropProbeCalls;
         privateRefJitFromResourceDropOrder.push_back(marker);
+        privateRefJitRootDropOrder.push_back(marker);
     }
-    else if (marker == 67) ++privateRefJitReturnedOkDropProbeCalls;
+    else if (marker == 67) {
+        ++privateRefJitReturnedOkDropProbeCalls;
+        privateRefJitRootDropOrder.push_back(marker);
+    }
     else if (marker == 66) ++privateRefJitReturnedPairDropProbeCalls;
     else if (marker == 71 || marker == 73 ||
              marker == 79 || marker == 81 || marker == 83 ||
@@ -4556,6 +4561,14 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "  apply selected { checkpoint(1) {} }\n"
         "  return Err::<i32, ReturnedResource>(move resource);\n"
         "}\n"
+        "runtime fn try_apply_two_preowned_resource_return("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, ReturnedResource> {\n"
+        "  let first = new ReturnedResource(67);\n"
+        "  let second = new ReturnedResource(59);\n"
+        "  apply selected { checkpoint(1) {} }\n"
+        "  return Err::<i32, ReturnedResource>(move second);\n"
+        "}\n"
         "runtime fn try_apply_scalar_preowned("
             "selected: RuntimeFragmentRef<checkpoint>) "
             "-> Result<i32, i32> {\n"
@@ -4766,6 +4779,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* tryApplyDispatchedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyLateResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyPreownedResourceReturn = nullptr;
+    moon::FunctionDecl* tryApplyTwoPreownedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyScalarPreowned = nullptr;
     moon::FunctionDecl* tryApplyScalarOutlinedOwner = nullptr;
     moon::FunctionDecl* tryApplyOutlinedResourceReturn = nullptr;
@@ -4817,6 +4831,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 tryApplyLateResourceReturn = function;
             if (function->name == "try_apply_preowned_resource_return")
                 tryApplyPreownedResourceReturn = function;
+            if (function->name == "try_apply_two_preowned_resource_return")
+                tryApplyTwoPreownedResourceReturn = function;
             if (function->name == "try_apply_scalar_preowned")
                 tryApplyScalarPreowned = function;
             if (function->name == "try_apply_scalar_outlined_owner")
@@ -4854,6 +4870,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !tryApplyEarlyContinueFrom || !tryApplyEarlyContinueFromElse ||
         !tryApplyResourceReturn || !tryApplyDispatchedResourceReturn ||
         !tryApplyLateResourceReturn || !tryApplyPreownedResourceReturn ||
+        !tryApplyTwoPreownedResourceReturn ||
         !tryApplyScalarPreowned || !tryApplyScalarOutlinedOwner ||
         !tryApplyOutlinedResourceReturn ||
         !tryApplyFromResourceReturn ||
@@ -7079,6 +7096,73 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     if (privateRefJitAllDropProbeCalls != preownedDropsBefore + 4 ||
         !privateRefJitDropProbeValid)
         return fail("preowned Result did not Drop once on each path");
+    if (!tryApplyTwoPreownedResourceReturn->controlFlow)
+        return fail("two-owner Result has no sealed CFG");
+    moon::Verifier twoOwnerWitness;
+    const auto& twoOwnerGraph =
+        *tryApplyTwoPreownedResourceReturn->controlFlow;
+    std::string twoOwnerFlowError;
+    const auto twoOwnerFlow = moon::planRuntimeRefApplyFlow(
+        twoOwnerGraph, twoOwnerFlowError);
+    if (!twoOwnerWitness.verify(twoOwnerGraph, *tryApplyModule) ||
+        !twoOwnerFlow)
+        return fail("two-owner Result lost ownership flow");
+    std::optional<std::vector<moon::CleanupId>> twoOwnerActive;
+    const auto matchesTwoOwners = [&](moon::BlockId block) {
+        const auto* active = twoOwnerWitness.activeCleanupsBeforeEdge(block);
+        if (!active || active->size() != 2 ||
+            (twoOwnerActive && *twoOwnerActive != *active))
+            return false;
+        twoOwnerActive = *active;
+        std::vector<std::string> names;
+        for (const auto id : *active) {
+            const auto* cleanup = twoOwnerGraph.findCleanup(id);
+            const auto* local = cleanup
+                ? twoOwnerGraph.findLocal(cleanup->place.root) : nullptr;
+            if (!cleanup || !local ||
+                cleanup->scope != twoOwnerGraph.rootScope ||
+                cleanup->place.projections.size() != 0 ||
+                cleanup->kind != moon::CleanupKind::Value ||
+                cleanup->action != luna::ownership::CleanupAction::Drop)
+                return false;
+            names.push_back(local->name);
+        }
+        std::sort(names.begin(), names.end());
+        return names == std::vector<std::string>{"first", "second"};
+    };
+    bool sawTwoOwnerDerivation = false;
+    bool sawTwoOwnerDispatch = false;
+    for (const auto& edge : twoOwnerFlow->edges)
+        if (!edge.enters.empty()) {
+            sawTwoOwnerDerivation = true;
+            if (!matchesTwoOwners(edge.source))
+                return fail("two-owner Result lost derivation cleanups");
+        }
+    for (const auto& block : twoOwnerGraph.blocks)
+        if (block.terminator.kind == moon::TerminatorKind::RuntimeSlot) {
+            sawTwoOwnerDispatch = true;
+            if (!matchesTwoOwners(block.id))
+                return fail("two-owner Result lost dispatch cleanups");
+        }
+    if (!sawTwoOwnerDerivation || !sawTwoOwnerDispatch)
+        return fail("two-owner Result lost a failure boundary");
+    privateRefJitRootDropOrder.clear();
+    const auto twoOwnerDropsBefore = privateRefJitAllDropProbeCalls;
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyTwoPreownedResourceReturn,
+            privateRefJitError, 1, false, 1, false, false,
+            {1}, {}, std::pair<bool, int32_t>{false, 59}, 1,
+            false, false, false, nullptr, 1, false, std::nullopt,
+            false, false, std::nullopt, true, 2)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("two-owner Result lost recoverable cleanup");
+    }
+    if (privateRefJitAllDropProbeCalls != twoOwnerDropsBefore + 8 ||
+        privateRefJitRootDropOrder !=
+            std::vector<int32_t>{59, 67, 59, 67, 67, 59, 67, 59} ||
+        !privateRefJitDropProbeValid)
+        return fail("two-owner Result lost reverse Drop order");
     if (!tryApplyScalarPreowned->controlFlow)
         return fail("scalar preowned Result has no sealed CFG");
     moon::Verifier scalarPreownedWitness;

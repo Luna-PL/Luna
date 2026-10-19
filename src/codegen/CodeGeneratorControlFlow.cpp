@@ -668,9 +668,8 @@ void CodeGenerator::generateControlFlowBody(
                         mHelpers->i32Ty(),
                         LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1));
                 else if (privateResultStatus) {
-                    if (!mPrivateRefResultFailureCleanup.empty()) {
-                        const auto* cleanup = graph.findCleanup(
-                            mPrivateRefResultFailureCleanup);
+                    for (const auto cleanupId : mPrivateRefResultFailureCleanups) {
+                        const auto* cleanup = graph.findCleanup(cleanupId);
                         if (!cleanup)
                             error("private Result derivation failure lost its cleanup");
                         else
@@ -1631,9 +1630,8 @@ void CodeGenerator::generateControlFlowBody(
                             mHelpers->i32Ty(),
                             LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1));
                     else if (privateResultStatus) {
-                        if (!mPrivateRefResultFailureCleanup.empty()) {
-                            const auto* cleanup = graph.findCleanup(
-                                mPrivateRefResultFailureCleanup);
+                        for (const auto cleanupId : mPrivateRefResultFailureCleanups) {
+                            const auto* cleanup = graph.findCleanup(cleanupId);
                             if (!cleanup)
                                 error("private Result dispatch failure lost its cleanup");
                             else
