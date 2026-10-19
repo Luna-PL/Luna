@@ -293,7 +293,8 @@ bool exercisePrivateRefApplyJit(
     bool exerciseSelectorFailure = false,
     bool failSecondDispatch = false,
     std::optional<std::pair<int32_t, unsigned>> injectedDispatchFailure =
-        std::nullopt) {
+        std::nullopt,
+    bool exerciseStatusDispatchFailure = false) {
     const moon::SlotDecl* slot = nullptr;
     const moon::SlotDecl* secondSlot = nullptr;
     for (const auto& declaration : module.declarations)
@@ -315,6 +316,9 @@ bool exercisePrivateRefApplyJit(
                                  !entryRecord)) ||
         (exerciseLoadedResult && (!transferredDropCalls ||
                                   !expectedResult || twoBorrowedReferences)) ||
+        (exerciseStatusDispatchFailure &&
+         (!expectedResult || transferredDropCalls ||
+          expectedDispatches != 1 || expectedValues.size() != 1)) ||
         (branchSelector && twoBorrowedReferences) ||
         (exerciseSelectorFailure && (!branchSelector || *branchSelector)) ||
         (failSecondDispatch &&
@@ -358,17 +362,21 @@ bool exercisePrivateRefApplyJit(
         ? jit->lookup("__luna_private_ref_apply_drop_test", error)
         : nullptr;
     if (transferredDropCalls && !dropAddress) return false;
+    using StatusProbe = int32_t (*)(const void*, void*);
+    const void* statusProbeAddress =
+        exerciseLoadedResult || exerciseStatusDispatchFailure
+            ? jit->lookup(
+                "__luna_private_ref_result_status_failure_probe_test", error)
+            : nullptr;
+    if ((exerciseLoadedResult || exerciseStatusDispatchFailure) &&
+        !statusProbeAddress) return false;
+    const auto statusProbe = reinterpret_cast<StatusProbe>(
+        const_cast<void*>(statusProbeAddress));
     std::unique_ptr<LunaPrivateRefResultLoadedEntry> loadedResult;
     if (exerciseLoadedResult) {
-        const void* statusProbeAddress = jit->lookup(
-            "__luna_private_ref_result_status_failure_probe_test", error);
-        if (!statusProbeAddress) return false;
-        using StatusProbe = int32_t (*)();
-        const auto statusProbe = reinterpret_cast<StatusProbe>(
-            const_cast<void*>(statusProbeAddress));
         const auto dispatchesBeforeProbe = privateRefJitExecutions;
         const auto dropsBeforeProbe = privateRefJitAllDropProbeCalls;
-        if (statusProbe() !=
+        if (statusProbe(nullptr, nullptr) !=
                 LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
             privateRefJitExecutions != dispatchesBeforeProbe ||
             privateRefJitAllDropProbeCalls != dropsBeforeProbe) {
@@ -1169,6 +1177,38 @@ bool exercisePrivateRefApplyJit(
         secondDescriptor.slot_arguments_alignment};
     privateRefJitPayloadValid = true;
     privateRefJitResumeStatus = -1;
+    if (exerciseStatusDispatchFailure) {
+        const auto dropsBefore = privateRefJitAllDropProbeCalls;
+        privateRefJitRepeatedResumeStatus = 0;
+        privateRefJitRepeatedResumeFailureValue = expectedValues.front();
+        privateRefJitInjectRepeatedResumeFailure = true;
+        const auto failedStatus = statusProbe(
+            parent.opaque(), const_cast<void*>(handle.opaque()));
+        privateRefJitInjectRepeatedResumeFailure = false;
+        privateRefJitRepeatedResumeFailureValue = 0;
+        const auto recoveredStatus = statusProbe(
+            parent.opaque(), const_cast<void*>(handle.opaque()));
+        if (failedStatus !=
+                LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
+            recoveredStatus != 0 ||
+            privateRefJitRepeatedResumeStatus !=
+                LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
+            privateRefJitExecutions != before + 2 ||
+            privateRefJitAllDropProbeCalls != dropsBefore ||
+            luna_runtime_fragment_ref_check_v1(
+                handle.opaque(), slot->symbolId.value.c_str(),
+                slot->contractId.value.c_str()) !=
+                LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 ||
+            generationLease.expired()) {
+            error = "private Result status body lost outlined failure or recovery";
+            return false;
+        }
+        before = privateRefJitExecutions;
+        resumesBefore = privateRefJitCompletedResumes;
+        argumentsBefore = privateRefJitObservedArguments.size();
+        sourcesBefore = privateRefJitObservedSources.size();
+        privateRefJitResumeStatus = -1;
+    }
     if (injectedDispatchFailure) {
         privateRefJitRepeatedResumeStatus = 0;
         privateRefJitRepeatedResumeFailureValue =
@@ -4842,7 +4882,9 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !exercisePrivateRefApplyJit(
             *tryApplyModule, *tryApplyOutlinedReturn,
             privateRefJitError, 1, true, 0, false, false, {1}, {},
-            std::pair<bool, int32_t>{false, 7})) {
+            std::pair<bool, int32_t>{false, 7}, std::nullopt,
+            false, false, false, nullptr, 0, false, std::nullopt,
+            false, false, std::nullopt, true)) {
         std::cerr << privateRefJitError << '\n';
         return fail("outlined Ref apply Result return failed private JIT execution");
     }

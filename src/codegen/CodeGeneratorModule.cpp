@@ -2083,7 +2083,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         std::string invalidIR;
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
         if (executable) {
-            if (privateOwnedResultFacts) {
+            if (privateOwnedResultFacts ||
+                (privateScalarResultJit && function.params.size() == 1)) {
                 // Build a second, private source body so the existing Result
                 // transfer proof keeps its original graph. A trailing cell
                 // separates execution failure from the source Result tag.
@@ -2180,8 +2181,68 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     failure = "private Ref Result status body lost a failure exit";
                     return false;
                 }
+                std::vector<llvm::Function*> statusGraph{statusBody};
+                std::unordered_set<llvm::Function*> statusVisited;
+                size_t statusDispatches = 0;
+                for (size_t index = 0; index < statusGraph.size(); ++index) {
+                    auto* current = statusGraph[index];
+                    if (!statusVisited.insert(current).second) {
+                        failure = "private Ref Result status graph reused a callback";
+                        return false;
+                    }
+                    for (const auto& block : *current) {
+                        for (const auto& instruction : block) {
+                            const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                                &instruction);
+                            if (!call || !call->getCalledFunction()) continue;
+                            const auto name = call->getCalledFunction()->getName();
+                            if (name == "llvm.trap") {
+                                failure = "private Ref Result status graph retained a trap";
+                                return false;
+                            }
+                            if (name != "luna_runtime_fragment_dispatch_v1")
+                                continue;
+                            ++statusDispatches;
+                            auto* callback = llvm::dyn_cast<llvm::Function>(
+                                call->getArgOperand(7)->stripPointerCasts());
+                            if (!callback || !callback->hasInternalLinkage() ||
+                                !callback->getName().starts_with(
+                                    statusBody->getName().str() +
+                                    ".runtime_slot.") ||
+                                callback->arg_size() != 1 ||
+                                callback->getReturnType() !=
+                                    proof.mHelpers->i32Ty()) {
+                                failure = "private Ref Result status dispatch lost its callback";
+                                return false;
+                            }
+                            statusGraph.push_back(callback);
+                        }
+                        if (current == statusBody ||
+                            (!block.getName().starts_with("ref.apply.failed") &&
+                             !block.getName().starts_with("runtime.slot.failed")))
+                            continue;
+                        const auto* returned = llvm::dyn_cast<llvm::ReturnInst>(
+                            block.getTerminator());
+                        const auto* value = returned
+                            ? llvm::dyn_cast_or_null<llvm::ConstantInt>(
+                                returned->getReturnValue())
+                            : nullptr;
+                        if (!value || value->getSExtValue() !=
+                                LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1) {
+                            failure = "private Ref Result outlined failure lost its status";
+                            return false;
+                        }
+                    }
+                }
+                if (statusDispatches != connectedDispatches ||
+                    statusGraph.size() != pending.size()) {
+                    failure = "private Ref Result status graph changed its Slot topology";
+                    return false;
+                }
                 auto* statusProbe = llvm::Function::Create(
-                    llvm::FunctionType::get(proof.mHelpers->i32Ty(), false),
+                    llvm::FunctionType::get(proof.mHelpers->i32Ty(),
+                        {proof.mHelpers->ptrTy(), proof.mHelpers->ptrTy()},
+                        false),
                     llvm::Function::ExternalLinkage,
                     "__luna_private_ref_result_status_failure_probe_test",
                     *proof.mModule);
@@ -2189,10 +2250,9 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     *proof.mCtx, "entry", statusProbe));
                 auto* statusCell = statusBuilder.CreateAlloca(
                     proof.mHelpers->i32Ty());
-                auto* nullPointer = llvm::ConstantPointerNull::get(
-                    llvm::cast<llvm::PointerType>(proof.mHelpers->ptrTy()));
                 statusBuilder.CreateCall(statusBody,
-                    {nullPointer, nullPointer, statusCell});
+                    {statusProbe->getArg(0), statusProbe->getArg(1),
+                     statusCell});
                 statusBuilder.CreateRet(statusBuilder.CreateLoad(
                     proof.mHelpers->i32Ty(), statusCell));
             }

@@ -1823,11 +1823,13 @@ module. The six-argument entry is still limited to the private JIT candidate
 shape and does not create a Native v3 export.
 An additional private Result source body now takes a trailing status cell.
 Its direct context-derivation and Slot-dispatch failure exits write `-1` and
-return an inert Result after context cleanup. The producer checks that these
-direct failure exits exist and contain no trap; a JIT probe exercises null
-context/Ref derivation failure without dispatch or resource Drop. This body is
-not yet called by the six-argument transfer entry, and outlined continuation
-failure propagation is not yet proved.
+return an inert Result after context cleanup. The producer checks those exits,
+the connected outlined callback graph, callback failure returns and absence of
+traps. A JIT probe exercises null context/Ref derivation failure without
+dispatch or resource Drop. A scalar Result outlined-return fixture also injects
+a Runtime dispatch failure, observes `-1` from the status body, then succeeds
+with the same borrowed Ref. The owned Result transfer still calls the old body;
+the status body is not yet bound to caller outputs or a public status domain.
 The private loaded Result adapter now also has a typed host call. It checks
 output cells before ingress, pins the Runtime-issued parent and borrowed Ref,
 checks the exact frozen Slot/Contract, and retains those pins through the
@@ -2596,11 +2598,13 @@ not a public ABI decision or stable-release approval:
    separate test-only source body now carries an execution status through a
    trailing cell. Its direct failure exits return `-1`, and a null-input JIT
    probe confirms the derivation failure path returns without dispatch or
-   resource Drop. The next slice must propagate failures from outlined
-   continuations into that cell, prove the emitted cleanup order, connect the
-   status body to the transfer entry, and check that a real failure leaves all
-   caller outputs untouched. Exercise failure followed by success before
-   binding the public v3 status `3` domain.
+   resource Drop. A scalar outlined Result fixture now observes dispatch
+   failure through that cell, then makes a successful call with the same Ref.
+   The generated callback graph has a bounded topology and checked failure
+   returns. The next slice must prove owned Result cleanup on these failure
+   paths, connect the status body to the transfer entry, and check that a real
+   failure leaves all caller outputs untouched before binding the public v3
+   status `3` domain.
    Every admitted exit must release contexts in
    inner-to-outer order exactly once, after apply-local cleanup and before a
    borrowed Ref owner is dropped. Keep unsupported paths rejected meanwhile.
