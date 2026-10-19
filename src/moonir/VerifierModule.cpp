@@ -155,6 +155,7 @@ bool Verifier::nativeRefUnitCandidateShape(
 
 bool Verifier::verify(const Module& module) {
     mErrors.clear();
+    mActiveCleanupsBeforeEdge.clear();
     mVerifiedTypeIds.clear();
     mActiveTypeIds.clear();
     if (module.formatMajor != FormatMajor) {

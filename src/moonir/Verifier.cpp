@@ -260,8 +260,18 @@ void Verifier::verifyRegions(const ControlFlowGraph& graph, const Module& module
     }
 }
 
+const std::vector<CleanupId>* Verifier::activeCleanupsBeforeEdge(
+    BlockId block) const {
+    if (!mErrors.empty() || block.empty() ||
+        block.value >= mActiveCleanupsBeforeEdge.size())
+        return nullptr;
+    const auto& active = mActiveCleanupsBeforeEdge[block.value];
+    return active ? &*active : nullptr;
+}
+
 bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
     mErrors.clear();
+    mActiveCleanupsBeforeEdge.clear();
     mVerifiedTypeIds.clear();
     mActiveTypeIds.clear();
     if (!module.typeTableSealed)

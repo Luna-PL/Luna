@@ -11,6 +11,7 @@ namespace moon {
 
 void Verifier::verifyOwnershipDataflow(
     const ControlFlowGraph& graph, const Module& module, bool hasEntry) {
+    mActiveCleanupsBeforeEdge.assign(graph.blocks.size(), std::nullopt);
     const auto localVisibleFrom = [&graph](
         ScopeId localScope, ScopeId useScope) {
         std::unordered_set<uint32_t> visited;
@@ -575,8 +576,18 @@ void Verifier::verifyOwnershipDataflow(
                                  edgeState, context);
                 propagate(edge.target, edgeState, block.terminator.location);
             };
+            const auto recordActiveCleanups = [&]() {
+                std::vector<CleanupId> active;
+                for (const auto& cleanup : graph.cleanups)
+                    if (cleanup.id.value < state.size() &&
+                        state[cleanup.id.value])
+                        active.push_back(cleanup.id);
+                mActiveCleanupsBeforeEdge[blockId.value] =
+                    std::move(active);
+            };
             switch (block.terminator.kind) {
                 case TerminatorKind::Jump:
+                    recordActiveCleanups();
                     propagateEdge(block.terminator.primary, state,
                                   "jump edge cleanup");
                     break;
@@ -639,6 +650,7 @@ void Verifier::verifyOwnershipDataflow(
                     break;
                 case TerminatorKind::RuntimeSlot:
                     transferExpr(block.terminator.operand.get(), state);
+                    recordActiveCleanups();
                     propagateEdge(block.terminator.primary, state,
                                   "runtime Slot continuation cleanup");
                     propagateEdge(block.terminator.secondary, state,

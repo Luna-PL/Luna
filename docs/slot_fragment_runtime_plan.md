@@ -1833,6 +1833,10 @@ owner before a derivation or dispatch failure. Its earlier test-only status
 clone lacked cleanup for that owner, so this gate no longer emits that clone
 for owned Results. The owned transfer still calls the aggregate-only body;
 no public execution-failure status is claimed.
+The verifier now reports active canonical cleanup rows at Jump and Slot
+boundaries. Tests distinguish a live owner before the first dispatch from an
+owner constructed only after dispatch; callback return effects still need a
+separate proof before the latter can receive a recoverable status body.
 The private loaded Result adapter now also has a typed host call. It checks
 output cells before ingress, pins the Runtime-issued parent and borrowed Ref,
 checks the exact frozen Slot/Contract, and retains those pins through the
@@ -2612,6 +2616,15 @@ not a public ABI decision or stable-release approval:
    separate uncommitted-owner cleanup path. Prove both cases before re-enabling
    the clone, then connect it to the transfer entry and check untouched caller
    outputs before binding public v3 status `3`.
+   The MoonIR ownership verifier now exposes read-only active cleanup rows at
+   verified Jump and RuntimeSlot boundaries, after local operations and Slot
+   argument evaluation. The dispatched owned-Err fixture has a live `input`
+   cleanup at Apply entry and its first Slot, but none for that input after `?`
+   consumes it. A separate late-construction owned-Err fixture has no active
+   cleanup at derivation or Slot dispatch and passes the existing private owner
+   transfer/Drop path. An empty boundary cleanup set alone is insufficient for
+   status admission: outlined callbacks may construct or move an owner into
+   return storage before Runtime reports a dispatch failure.
    Every admitted exit must release contexts in
    inner-to-outer order exactly once, after apply-local cleanup and before a
    borrowed Ref owner is dropped. Keep unsupported paths rejected meanwhile.

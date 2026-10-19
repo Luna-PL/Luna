@@ -4535,6 +4535,13 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "  }\n"
         "  return Ok(0);\n"
         "}\n"
+        "runtime fn try_apply_late_resource_return("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, ReturnedResource> {\n"
+        "  apply selected { checkpoint(1) {} }\n"
+        "  let resource = new ReturnedResource(59);\n"
+        "  return Err::<i32, ReturnedResource>(move resource);\n"
+        "}\n"
         "runtime fn try_apply_from_resource_return("
             "selected: RuntimeFragmentRef<checkpoint>) "
             "-> Result<i32, ReturnedResource> {\n"
@@ -4714,6 +4721,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* tryApplyEarlyContinueFromElse = nullptr;
     moon::FunctionDecl* tryApplyResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyDispatchedResourceReturn = nullptr;
+    moon::FunctionDecl* tryApplyLateResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyFromResourceReturn = nullptr;
     moon::FunctionDecl* tryApplySplitOwnedFrom = nullptr;
     moon::FunctionDecl* tryApplySplitOwnedFromElse = nullptr;
@@ -4758,6 +4766,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 tryApplyResourceReturn = function;
             if (function->name == "try_apply_dispatched_resource_return")
                 tryApplyDispatchedResourceReturn = function;
+            if (function->name == "try_apply_late_resource_return")
+                tryApplyLateResourceReturn = function;
             if (function->name == "try_apply_from_resource_return")
                 tryApplyFromResourceReturn = function;
             if (function->name == "try_apply_split_owned_from")
@@ -4788,6 +4798,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !tryApplyMergeFrom || !tryApplyMergeFromElse ||
         !tryApplyEarlyContinueFrom || !tryApplyEarlyContinueFromElse ||
         !tryApplyResourceReturn || !tryApplyDispatchedResourceReturn ||
+        !tryApplyLateResourceReturn ||
         !tryApplyFromResourceReturn ||
         !tryApplySplitOwnedFrom || !tryApplySplitOwnedFromElse ||
         !tryApplyOkResourceReturn ||
@@ -6877,6 +6888,82 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !refApplyCfgVerifier.verify(
             *tryApplyDispatchedResourceReturn->controlFlow, *tryApplyModule))
         return fail("dispatched resource Err return did not verify");
+    moon::Verifier ownedFailureWitness;
+    const auto& dispatchedGraph =
+        *tryApplyDispatchedResourceReturn->controlFlow;
+    if (!ownedFailureWitness.verify(dispatchedGraph, *tryApplyModule))
+        return fail("dispatched resource Err lost ownership dataflow");
+    const auto inputLocal = std::find_if(
+        dispatchedGraph.locals.begin(), dispatchedGraph.locals.end(),
+        [](const auto& local) { return local.name == "input"; });
+    if (inputLocal == dispatchedGraph.locals.end())
+        return fail("dispatched resource Err lost its input owner");
+    const auto hasActiveInput = [&](moon::BlockId block) {
+        const auto* active = ownedFailureWitness.activeCleanupsBeforeEdge(
+            block);
+        return active && std::any_of(active->begin(), active->end(),
+            [&](moon::CleanupId id) {
+                const auto* cleanup = dispatchedGraph.findCleanup(id);
+                return cleanup && cleanup->place.root == inputLocal->id;
+            });
+    };
+    const auto dispatchedFlow = moon::planRuntimeRefApplyFlow(
+        dispatchedGraph, refApplyFlowError);
+    size_t liveInputSlots = 0;
+    size_t consumedInputSlots = 0;
+    for (const auto& block : dispatchedGraph.blocks)
+        if (block.terminator.kind == moon::TerminatorKind::RuntimeSlot) {
+            if (hasActiveInput(block.id)) ++liveInputSlots;
+            else ++consumedInputSlots;
+        }
+    if (!dispatchedFlow ||
+        !std::any_of(dispatchedFlow->edges.begin(),
+            dispatchedFlow->edges.end(), [&](const auto& edge) {
+                return !edge.enters.empty() && hasActiveInput(edge.source);
+            }) || !liveInputSlots || !consumedInputSlots)
+        return fail("owned Result failure sites lost path-sensitive cleanup state");
+    if (!tryApplyLateResourceReturn->controlFlow)
+        return fail("late owned Result has no sealed CFG");
+    moon::Verifier lateOwnedWitness;
+    const auto& lateOwnedGraph = *tryApplyLateResourceReturn->controlFlow;
+    std::string lateOwnedFlowError;
+    const auto lateOwnedFlow = moon::planRuntimeRefApplyFlow(
+        lateOwnedGraph, lateOwnedFlowError);
+    if (!lateOwnedWitness.verify(lateOwnedGraph, *tryApplyModule) ||
+        !lateOwnedFlow)
+        return fail("late owned Result lost its sealed ownership flow");
+    bool sawLateDerivation = false;
+    bool sawLateDispatch = false;
+    for (const auto& edge : lateOwnedFlow->edges)
+        if (!edge.enters.empty()) {
+            sawLateDerivation = true;
+            const auto* active = lateOwnedWitness.activeCleanupsBeforeEdge(
+                edge.source);
+            if (!active || !active->empty())
+                return fail("late owned Result acquired an owner before derivation");
+        }
+    for (const auto& block : lateOwnedGraph.blocks)
+        if (block.terminator.kind == moon::TerminatorKind::RuntimeSlot) {
+            sawLateDispatch = true;
+            const auto* active = lateOwnedWitness.activeCleanupsBeforeEdge(
+                block.id);
+            if (!active || !active->empty())
+                return fail("late owned Result acquired an owner before dispatch");
+        }
+    luna::codegen::NativeOwnedResultSourceFacts lateOwnedFacts;
+    std::string lateOwnedFactsError;
+    if (!sawLateDerivation || !sawLateDispatch ||
+        !luna::codegen::deriveNativeOwnedResultSourceFacts(
+            *tryApplyModule, *tryApplyLateResourceReturn,
+            lateOwnedFacts, lateOwnedFactsError))
+        return fail("late owned Result lost its Native v3 source facts");
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyLateResourceReturn,
+            privateRefJitError, 1, false, 1, false, false,
+            {1}, {}, std::pair<bool, int32_t>{false, 59}, 1)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("late owned Result did not transfer its returned owner");
+    }
     const auto dispatchedReturnedDropBefore =
         privateRefJitReturnedDropProbeCalls;
     privateRefJitDropProbeValid = true;

@@ -4,6 +4,7 @@
 
 #include "MoonIR.h"
 
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -25,6 +26,10 @@ public:
     bool verify(const Module& module);
     bool verify(const ControlFlowGraph& graph, const Module& module);
     const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
+    // Available after a successful CFG verification for Jump and RuntimeSlot
+    // blocks. These rows remain active after the block's operations and Slot
+    // operand, before an outgoing edge performs its own cleanups.
+    const std::vector<CleanupId>* activeCleanupsBeforeEdge(BlockId block) const;
 
 private:
     bool nativeRefUnitCandidateShape(
@@ -69,6 +74,7 @@ private:
     void error(const SourceLocation& location, const std::string& message);
 
     std::vector<diagnostic::Diagnostic> mErrors;
+    std::vector<std::optional<std::vector<CleanupId>>> mActiveCleanupsBeforeEdge;
     std::unordered_set<std::string> mVerifiedTypeIds;
     std::unordered_set<std::string> mActiveTypeIds;
     bool mAllowTypeParameters = false;
