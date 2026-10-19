@@ -1836,9 +1836,10 @@ its dispatch boundary is empty and normal callback Drop succeeds, but the
 status clone is still absent.
 An owned Result source can construct live local owners before a derivation
 or dispatch failure. The test-only status clone admits the same verified set
-of up to two root owner cleanups at both failure boundaries and emits their
-canonical Drops in reverse root-scope registration order. A second bounded
-owned-Err shape has no active cleanup there and constructs its owner after
+of distinct root owner cleanups at both failure boundaries, including owners
+of types other than the Result error type. It emits their canonical Drops in
+reverse root-scope registration order. A second bounded owned-Err shape has
+no active cleanup there and constructs its owner after
 dispatch returns. Both require one Slot and operation-free Jump-only outlined
 continuations with no edge cleanup. Probes cover null-context derivation and
 failure after resume, then normal transfer with the same borrowed Ref; the
@@ -1847,6 +1848,8 @@ after dispatch is never constructed on failure. A two-owner fixture verifies
 reverse Drop order on both failure exits and normal Drop of the unreturned
 owner plus transfer of the returned owner. The owned transfer still calls the
 aggregate-only body; no public execution-failure status is claimed.
+Another fixture retains three owners of two resource types and verifies the
+same failure ordering and successful transfer.
 The verifier now reports active canonical cleanup rows at Jump and Slot
 boundaries. Tests distinguish a live owner before the first dispatch from an
 owner constructed only after dispatch. Broader callback return effects still
@@ -2627,11 +2630,11 @@ not a public ABI decision or stable-release approval:
    An outlined scalar callback that creates and Drops its own resource also
    has no status clone despite an empty dispatch cleanup set.
    The generated callback graph has a bounded topology and checked failure
-   returns. Bounded owned Result status shapes now prove the same set of up
-   to two root cleanup rows at Apply entry and Slot dispatch and emit those
-   Drops in reverse registration order on both failure exits. The next
-   broader slice must derive cleanup for path-varying active owners or nested
-   scopes. Dispatch can also
+   returns. Bounded owned Result status shapes now prove the same set of
+   distinct root cleanup rows at Apply entry and Slot dispatch, regardless of
+   whether each local has the Result error type, and emit those Drops in reverse
+   registration order on both failure exits. The next broader slice must derive
+   cleanup for path-varying active owners or nested scopes. Dispatch can also
    report failure after an outlined callback has moved an owner into return
    storage, so that state needs a separate uncommitted-owner cleanup path.
    Prove those broader cases before connecting the status body to the transfer entry;
@@ -2646,6 +2649,9 @@ not a public ABI decision or stable-release approval:
    A two-owner fixture retains `first` and `second` at both boundaries;
    injected failures Drop `second` then `first`, while successful calls Drop
    `first` in the source and transfer `second` to the wrapper.
+   A mixed-type three-owner fixture adds a `SourceError` local before those
+   two owners. Injected failures Drop `second`, `first`, then `source`;
+   successful calls Drop `first` and `source` before transferring `second`.
    A separate late-construction owned-Err fixture has no active cleanup at
    derivation or Slot dispatch and passes the private owner transfer/Drop path.
    These test-only status clones are limited to one Slot and

@@ -98,12 +98,10 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
     const auto* result = program.findType(function.returnType);
     if (!result || result->typeArgumentIds.size() != 2)
         return std::nullopt;
-    const auto errorType = result->typeArgumentIds[1];
     std::optional<std::vector<moon::CleanupId>> failureCleanups;
     const auto matchFailureCleanups = [&](moon::BlockId block) {
         const auto* active = verifier.activeCleanupsBeforeEdge(block);
-        if (!active || active->size() > 2 ||
-            (failureCleanups && *failureCleanups != *active))
+        if (!active || (failureCleanups && *failureCleanups != *active))
             return false;
         failureCleanups = *active;
         std::unordered_set<uint32_t> roots;
@@ -117,7 +115,6 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
                 !cleanup->place.projections.empty() ||
                 cleanup->kind != moon::CleanupKind::Value ||
                 cleanup->action != luna::ownership::CleanupAction::Drop ||
-                cleanup->type != errorType ||
                 !roots.insert(cleanup->place.root.value).second)
                 return false;
         }

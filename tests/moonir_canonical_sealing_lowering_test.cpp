@@ -51,6 +51,7 @@ extern "C" void luna_private_ref_drop_probe(int32_t marker) {
         ++privateRefJitConversionDropProbeCalls;
         privateRefJitConversionDropOrder.push_back(marker);
         privateRefJitFromResourceDropOrder.push_back(marker);
+        privateRefJitRootDropOrder.push_back(marker);
     } else if (marker == 43 || marker == -43) {
         privateRefJitConversionDropOrder.push_back(marker);
         privateRefJitFromResourceDropOrder.push_back(marker);
@@ -4569,6 +4570,15 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "  apply selected { checkpoint(1) {} }\n"
         "  return Err::<i32, ReturnedResource>(move second);\n"
         "}\n"
+        "runtime fn try_apply_mixed_preowned_resource_return("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, ReturnedResource> {\n"
+        "  let source = new SourceError(47);\n"
+        "  let first = new ReturnedResource(67);\n"
+        "  let second = new ReturnedResource(59);\n"
+        "  apply selected { checkpoint(1) {} }\n"
+        "  return Err::<i32, ReturnedResource>(move second);\n"
+        "}\n"
         "runtime fn try_apply_scalar_preowned("
             "selected: RuntimeFragmentRef<checkpoint>) "
             "-> Result<i32, i32> {\n"
@@ -4780,6 +4790,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* tryApplyLateResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyPreownedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyTwoPreownedResourceReturn = nullptr;
+    moon::FunctionDecl* tryApplyMixedPreownedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyScalarPreowned = nullptr;
     moon::FunctionDecl* tryApplyScalarOutlinedOwner = nullptr;
     moon::FunctionDecl* tryApplyOutlinedResourceReturn = nullptr;
@@ -4833,6 +4844,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 tryApplyPreownedResourceReturn = function;
             if (function->name == "try_apply_two_preowned_resource_return")
                 tryApplyTwoPreownedResourceReturn = function;
+            if (function->name == "try_apply_mixed_preowned_resource_return")
+                tryApplyMixedPreownedResourceReturn = function;
             if (function->name == "try_apply_scalar_preowned")
                 tryApplyScalarPreowned = function;
             if (function->name == "try_apply_scalar_outlined_owner")
@@ -4871,6 +4884,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !tryApplyResourceReturn || !tryApplyDispatchedResourceReturn ||
         !tryApplyLateResourceReturn || !tryApplyPreownedResourceReturn ||
         !tryApplyTwoPreownedResourceReturn ||
+        !tryApplyMixedPreownedResourceReturn ||
         !tryApplyScalarPreowned || !tryApplyScalarOutlinedOwner ||
         !tryApplyOutlinedResourceReturn ||
         !tryApplyFromResourceReturn ||
@@ -7163,6 +7177,74 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             std::vector<int32_t>{59, 67, 59, 67, 67, 59, 67, 59} ||
         !privateRefJitDropProbeValid)
         return fail("two-owner Result lost reverse Drop order");
+    if (!tryApplyMixedPreownedResourceReturn->controlFlow)
+        return fail("mixed-owner Result has no sealed CFG");
+    moon::Verifier mixedOwnerWitness;
+    const auto& mixedOwnerGraph =
+        *tryApplyMixedPreownedResourceReturn->controlFlow;
+    std::string mixedOwnerFlowError;
+    const auto mixedOwnerFlow = moon::planRuntimeRefApplyFlow(
+        mixedOwnerGraph, mixedOwnerFlowError);
+    if (!mixedOwnerWitness.verify(mixedOwnerGraph, *tryApplyModule) ||
+        !mixedOwnerFlow)
+        return fail("mixed-owner Result lost ownership flow");
+    std::optional<std::vector<moon::CleanupId>> mixedOwnerActive;
+    const auto matchesMixedOwners = [&](moon::BlockId block) {
+        const auto* active = mixedOwnerWitness.activeCleanupsBeforeEdge(block);
+        if (!active || active->size() != 3 ||
+            (mixedOwnerActive && *mixedOwnerActive != *active))
+            return false;
+        mixedOwnerActive = *active;
+        std::vector<std::string> names;
+        for (const auto id : *active) {
+            const auto* cleanup = mixedOwnerGraph.findCleanup(id);
+            const auto* local = cleanup
+                ? mixedOwnerGraph.findLocal(cleanup->place.root) : nullptr;
+            if (!cleanup || !local ||
+                cleanup->scope != mixedOwnerGraph.rootScope ||
+                local->scope != mixedOwnerGraph.rootScope ||
+                !cleanup->place.projections.empty() ||
+                cleanup->kind != moon::CleanupKind::Value ||
+                cleanup->action != luna::ownership::CleanupAction::Drop)
+                return false;
+            names.push_back(local->name);
+        }
+        std::sort(names.begin(), names.end());
+        return names == std::vector<std::string>{"first", "second", "source"};
+    };
+    bool sawMixedOwnerDerivation = false;
+    bool sawMixedOwnerDispatch = false;
+    for (const auto& edge : mixedOwnerFlow->edges)
+        if (!edge.enters.empty()) {
+            sawMixedOwnerDerivation = true;
+            if (!matchesMixedOwners(edge.source))
+                return fail("mixed-owner Result lost derivation cleanups");
+        }
+    for (const auto& block : mixedOwnerGraph.blocks)
+        if (block.terminator.kind == moon::TerminatorKind::RuntimeSlot) {
+            sawMixedOwnerDispatch = true;
+            if (!matchesMixedOwners(block.id))
+                return fail("mixed-owner Result lost dispatch cleanups");
+        }
+    if (!sawMixedOwnerDerivation || !sawMixedOwnerDispatch)
+        return fail("mixed-owner Result lost a failure boundary");
+    privateRefJitRootDropOrder.clear();
+    const auto mixedOwnerDropsBefore = privateRefJitAllDropProbeCalls;
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyMixedPreownedResourceReturn,
+            privateRefJitError, 1, false, 1, false, false,
+            {1}, {}, std::pair<bool, int32_t>{false, 59}, 1,
+            false, false, false, nullptr, 2, false, std::nullopt,
+            false, false, std::nullopt, true, 3)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("mixed-owner Result lost recoverable cleanup");
+    }
+    if (privateRefJitAllDropProbeCalls != mixedOwnerDropsBefore + 12 ||
+        privateRefJitRootDropOrder != std::vector<int32_t>{
+            59, 67, 47, 59, 67, 47, 67, 47, 59, 67, 47, 59} ||
+        !privateRefJitDropProbeValid)
+        return fail("mixed-owner Result lost canonical Drop order");
     if (!tryApplyScalarPreowned->controlFlow)
         return fail("scalar preowned Result has no sealed CFG");
     moon::Verifier scalarPreownedWitness;
