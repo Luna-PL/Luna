@@ -313,7 +313,8 @@ bool exercisePrivateRefApplyJit(
     bool expectNoStatusBody = false,
     std::optional<unsigned> derivationFailureDropCalls = std::nullopt,
     bool injectPreResumeDispatchFailure = false,
-    unsigned preResumeDispatchFailureDropCalls = 0) {
+    unsigned preResumeDispatchFailureDropCalls = 0,
+    std::optional<bool> branchSelector2 = std::nullopt) {
     const moon::SlotDecl* slot = nullptr;
     const moon::SlotDecl* secondSlot = nullptr;
     for (const auto& declaration : module.declarations)
@@ -325,6 +326,9 @@ bool exercisePrivateRefApplyJit(
     const auto* arguments = slot ? module.findType(slot->argumentsType) : nullptr;
     const auto* valueType = arguments && arguments->fields.size() == 1
         ? module.findType(arguments->fields.front().type) : nullptr;
+    const size_t selectorCount = static_cast<size_t>(branchSelector.has_value()) +
+        static_cast<size_t>(branchSelector2.has_value());
+    const size_t borrowedParameterCount = twoBorrowedReferences ? 2 : 1;
     const bool syntheticSecondTarget =
         differentSlots && !secondSlot &&
         (transferredDropCalls.has_value() || exerciseSelectorFailure);
@@ -340,32 +344,38 @@ bool exercisePrivateRefApplyJit(
           expectedDispatches != 1 || expectedValues.size() != 1)) ||
         (injectPreResumeDispatchFailure &&
          !exerciseStatusDispatchFailure) ||
+        (branchSelector2 && !branchSelector) ||
         (branchSelector && twoBorrowedReferences) ||
-        (exerciseSelectorFailure && (!branchSelector || *branchSelector)) ||
+        (exerciseSelectorFailure &&
+         (!branchSelector || *branchSelector || branchSelector2)) ||
         (failSecondDispatch &&
          (!exerciseSelectorFailure || expectedDispatches != 2)) ||
         (injectedDispatchFailure &&
-         (branchSelector || differentSlots || expectedResult ||
-          transferredDropCalls || exerciseIngressGate ||
+         (branchSelector || branchSelector2 || differentSlots ||
+          expectedResult || transferredDropCalls || exerciseIngressGate ||
           exerciseSelectorFailure || expectedDispatches < 2 ||
           injectedDispatchFailure->second == 0 ||
           injectedDispatchFailure->second > expectedDispatches)) ||
-        function.params.size() !=
-            ((twoBorrowedReferences || branchSelector) ? 2u : 1u) ||
+        function.params.size() != borrowedParameterCount + selectorCount ||
         !valueType || valueType->kind != TypeKind::I32 ||
         std::any_of(function.params.begin(),
-            branchSelector ? function.params.end() - 1 : function.params.end(),
+            function.params.begin() + borrowedParameterCount,
             [](const auto& parameter) {
                 return parameter.relation !=
                     luna::ownership::Relation::SharedBorrow;
             }) ||
-        (branchSelector && [&] {
-            const auto& selector = function.params.back();
-            const auto* type = module.findType(selector.type);
-            return !type || type->kind != TypeKind::Bool ||
-                selector.relation != luna::ownership::Relation::Owned ||
-                selector.usage != luna::ownership::Usage::Copy;
-        }())) {
+        [&] {
+            for (size_t index = borrowedParameterCount;
+                 index < function.params.size(); ++index) {
+                const auto& selector = function.params[index];
+                const auto* type = module.findType(selector.type);
+                if (!type || type->kind != TypeKind::Bool ||
+                    selector.relation != luna::ownership::Relation::Owned ||
+                    selector.usage != luna::ownership::Usage::Copy)
+                    return true;
+            }
+            return false;
+        }()) {
         error = "private Ref JIT fixture lacks Slot/layout/borrowed parameter";
         return false;
     }
@@ -385,6 +395,8 @@ bool exercisePrivateRefApplyJit(
     if (transferredDropCalls && !dropAddress) return false;
     using StatusProbe = int32_t (*)(const void*, void*);
     using StatusProbeSelector = int32_t (*)(const void*, void*, bool);
+    using StatusProbeSelectorTwo =
+        int32_t (*)(const void*, void*, bool, bool);
     const void* statusProbeAddress =
         exerciseStatusDispatchFailure
             ? jit->lookup(
@@ -395,8 +407,14 @@ bool exercisePrivateRefApplyJit(
         const_cast<void*>(statusProbeAddress));
     const auto statusProbeSelector = reinterpret_cast<StatusProbeSelector>(
         const_cast<void*>(statusProbeAddress));
+    const auto statusProbeSelectorTwo =
+        reinterpret_cast<StatusProbeSelectorTwo>(
+            const_cast<void*>(statusProbeAddress));
     const auto invokeStatusProbe = [&](const void* context, void* reference) {
-        return branchSelector
+        return branchSelector2
+            ? statusProbeSelectorTwo(context, reference, *branchSelector,
+                                     *branchSelector2)
+            : branchSelector
             ? statusProbeSelector(context, reference, *branchSelector)
             : statusProbe(context, reference);
     };
@@ -655,8 +673,11 @@ bool exercisePrivateRefApplyJit(
     using EntryOne = int32_t (*)(const void*, void*);
     using EntryTwo = int32_t (*)(const void*, void*, void*);
     using EntrySelector = int32_t (*)(const void*, void*, bool);
+    using EntrySelectorTwo = int32_t (*)(const void*, void*, bool, bool);
     using EntryResultOne = uint64_t (*)(const void*, void*);
     using EntryResultSelector = uint64_t (*)(const void*, void*, bool);
+    using EntryResultSelectorTwo =
+        uint64_t (*)(const void*, void*, bool, bool);
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST == 0);
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_CONTEXT_V1_TEST == 1);
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST == 2);
@@ -691,10 +712,15 @@ bool exercisePrivateRefApplyJit(
         const_cast<void*>(address));
     const auto entrySelector = reinterpret_cast<EntrySelector>(
         const_cast<void*>(address));
+    const auto entrySelectorTwo = reinterpret_cast<EntrySelectorTwo>(
+        const_cast<void*>(address));
     const auto entryResultOne = reinterpret_cast<EntryResultOne>(
         const_cast<void*>(address));
     const auto entryResultSelector = reinterpret_cast<EntryResultSelector>(
         const_cast<void*>(address));
+    const auto entryResultSelectorTwo =
+        reinterpret_cast<EntryResultSelectorTwo>(
+            const_cast<void*>(address));
     const auto entryTransfer = reinterpret_cast<EntryTransfer>(
         const_cast<void*>(transferAddress));
     const auto entryDrop = reinterpret_cast<EntryDrop>(
@@ -1168,7 +1194,11 @@ bool exercisePrivateRefApplyJit(
                 error = "private Result JIT fixture requires one borrowed Ref";
                 return false;
             }
-            const uint64_t packed = branchSelector
+            const uint64_t packed = branchSelector2
+                ? entryResultSelectorTwo(parent.opaque(),
+                    const_cast<void*>(handle.opaque()), *branchSelector,
+                    *branchSelector2)
+                : branchSelector
                 ? entryResultSelector(parent.opaque(),
                     const_cast<void*>(handle.opaque()), *branchSelector)
                 : entryResultOne(parent.opaque(),
@@ -1183,7 +1213,14 @@ bool exercisePrivateRefApplyJit(
             }
             return true;
         }
-        if (branchSelector) {
+        if (branchSelector2) {
+            if (entrySelectorTwo(parent.opaque(),
+                    const_cast<void*>(handle.opaque()), *branchSelector,
+                    *branchSelector2) != 0) {
+                error = "private Ref selector body did not return success";
+                return false;
+            }
+        } else if (branchSelector) {
             if (entrySelector(parent.opaque(),
                     const_cast<void*>(handle.opaque()),
                     *branchSelector) != 0) {
@@ -4725,7 +4762,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "  return Ok(0);\n"
         "}\n"
         "runtime fn try_apply_branched_outlined_resource_cleanup("
-            "selected: RuntimeFragmentRef<checkpoint>, return_owner: bool) "
+            "selected: RuntimeFragmentRef<checkpoint>, return_owner: bool, "
+            "include_second: bool) "
             "-> Result<i32, ReturnedResource> {\n"
         "  apply selected {\n"
         "    checkpoint(1) {\n"
@@ -4733,8 +4771,12 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "        let resource = new ReturnedResource(59);\n"
         "        return Err::<i32, ReturnedResource>(move resource);\n"
         "      } else {\n"
-        "        let first_completion = new ReturnedResource(61);\n"
-        "        let second_completion = new ReturnedResource(63);\n"
+        "        if include_second {\n"
+        "          let first_completion = new ReturnedResource(61);\n"
+        "          let second_completion = new ReturnedResource(63);\n"
+        "        } else {\n"
+        "          let first_completion = new ReturnedResource(61);\n"
+        "        }\n"
         "      }\n"
         "    }\n"
         "  }\n"
@@ -7708,6 +7750,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     if (!branchedCleanupWitness.verify(branchedCleanupGraph, *tryApplyModule))
         return fail("branched callback cleanup fixture lost ownership proof");
     size_t branchedCleanupEdges = 0;
+    std::vector<std::vector<uint32_t>> branchedCleanupOwnerSets;
     for (const auto& block : branchedCleanupGraph.blocks) {
         bool outlined = false;
         for (auto regionId = block.region; !regionId.empty();) {
@@ -7724,36 +7767,44 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             continue;
         const auto* active = branchedCleanupWitness.activeCleanupsBeforeEdge(
             block.id);
-        if (block.operations.size() != 4 ||
-            block.terminator.primary.cleanups.size() != 2 ||
-            !active || active->size() != 2)
-            return fail("branched callback cleanup edge lost its two owners");
+        const size_t ownerCount = block.operations.size() / 2;
+        if ((ownerCount != 1 && ownerCount != 2) ||
+            block.operations.size() != ownerCount * 2 ||
+            block.terminator.primary.cleanups.size() != ownerCount ||
+            !active || active->size() != ownerCount)
+            return fail("branched callback cleanup edge has the wrong owner set");
         std::unordered_set<uint32_t> activeIds;
         for (const auto cleanupId : *active)
             activeIds.insert(cleanupId.value);
-        for (size_t ownerIndex = 0; ownerIndex < 2; ++ownerIndex) {
+        std::vector<uint32_t> ownerSet;
+        for (size_t ownerIndex = 0; ownerIndex < ownerCount; ++ownerIndex) {
             const auto* binding = dynamic_cast<const moon::LetStmt*>(
                 block.operations[ownerIndex * 2 + 1].get());
             const auto cleanupId = block.terminator.primary.cleanups[
-                1 - ownerIndex];
+                ownerCount - ownerIndex - 1];
             const auto* cleanup = branchedCleanupGraph.findCleanup(cleanupId);
             const auto* owner = binding
                 ? branchedCleanupGraph.findLocal(binding->local) : nullptr;
             if (!binding || !cleanup || !owner ||
                 cleanup->place.root != binding->local ||
-                owner->name != (ownerIndex == 0
-                    ? "first_completion" : "second_completion") ||
+                owner->name != (ownerIndex == 0 ? "first_completion"
+                    : "second_completion") ||
                 cleanup->kind != moon::CleanupKind::Value ||
                 cleanup->action != luna::ownership::CleanupAction::Drop ||
                 cleanup->place.root.empty() ||
                 !cleanup->place.projections.empty() ||
                 !activeIds.count(cleanup->id.value))
                 return fail("branched callback cleanup edge lost reverse Drop order");
+            ownerSet.push_back(binding->local.value);
         }
+        std::sort(ownerSet.begin(), ownerSet.end());
+        branchedCleanupOwnerSets.push_back(std::move(ownerSet));
         ++branchedCleanupEdges;
     }
-    if (branchedCleanupEdges != 1)
-        return fail("branched callback did not retain one local cleanup edge");
+    if (branchedCleanupEdges != 2 ||
+        branchedCleanupOwnerSets.size() != 2 ||
+        branchedCleanupOwnerSets[0] == branchedCleanupOwnerSets[1])
+        return fail("branched callback did not retain distinct path cleanup sets");
     privateRefJitBranchLocalDropOrder.clear();
     const auto branchedLocalDropCallsBefore =
         privateRefJitBranchLocalDropProbeCalls;
@@ -7763,16 +7814,34 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             privateRefJitError, 1, false, 1, false, false,
             {1}, {}, std::pair<bool, int32_t>{true, 0}, std::nullopt,
             false, false, false, nullptr, 0, false, false,
-            false, false, std::nullopt, true, 4, false, 0, true, 0)) {
+            false, false, std::nullopt, true, 4, false, 0, true, 0, true)) {
         std::cerr << privateRefJitError << '\n';
-        return fail("normal callback branch failed to clean its local owners");
+        return fail("two-owner completion path failed to preserve status cleanup");
     }
     if (privateRefJitBranchLocalDropProbeCalls !=
             branchedLocalDropCallsBefore + 8 ||
         privateRefJitBranchLocalDropOrder !=
             std::vector<int32_t>{63, 61, 63, 61, 63, 61, 63, 61} ||
         !privateRefJitDropProbeValid)
-        return fail("callback local owner was not dropped once on each completion");
+        return fail("two-owner completion path lost reverse Drop order");
+    privateRefJitBranchLocalDropOrder.clear();
+    const auto singleOwnerDropCallsBefore =
+        privateRefJitBranchLocalDropProbeCalls;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyBranchedOutlinedResourceCleanup,
+            privateRefJitError, 1, false, 1, false, false,
+            {1}, {}, std::pair<bool, int32_t>{true, 0}, std::nullopt,
+            false, false, false, nullptr, 0, false, false,
+            false, false, std::nullopt, true, 2, false, 0, true, 0, false)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("one-owner completion path failed to preserve status cleanup");
+    }
+    if (privateRefJitBranchLocalDropProbeCalls !=
+            singleOwnerDropCallsBefore + 4 ||
+        privateRefJitBranchLocalDropOrder !=
+            std::vector<int32_t>{61, 61, 61, 61} ||
+        !privateRefJitDropProbeValid)
+        return fail("one-owner completion path cleaned an absent owner");
     const auto localDropsBeforeErrBranch =
         privateRefJitBranchLocalDropProbeCalls;
     if (!exercisePrivateRefApplyJit(
@@ -7780,7 +7849,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             privateRefJitError, 1, true, 0, false, false,
             {1}, {}, std::pair<bool, int32_t>{false, 59}, std::nullopt,
             false, false, false, nullptr, 0, false, true,
-            false, false, std::nullopt, true, 1, false, 0, true, 0)) {
+            false, false, std::nullopt, true, 1, false, 0, true, 0, false)) {
         std::cerr << privateRefJitError << '\n';
         return fail("owned Err arm was affected by completion-branch cleanup");
     }

@@ -29,6 +29,7 @@
 #include <exception>
 #include <memory>
 #include <optional>
+#include <unordered_map>
 #include <unordered_set>
 
 using moon::FunctionDecl;
@@ -81,8 +82,9 @@ bool matchesPrivateRefContextEffect(
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 // A failed dispatch may be reported after its continuation has run. Admit an
 // owned Result status clone only for inert outlines, one moved Err return, or
-// one bool-selected return/completion branch. Returned owners are guarded by a
-// runtime initialized bit before failure cleanup.
+// a copied-bool return/completion split with one nested completion split.
+// Returned owners are guarded by a runtime initialized bit before failure
+// cleanup.
 struct PrivateOwnedResultStatusPlan {
     std::vector<std::vector<moon::CleanupId>> failureCleanupsByBlock;
     std::vector<bool> cleanupPendingReturnByBlock;
@@ -92,9 +94,11 @@ struct PrivateOwnedResultStatusPlan {
 std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
     const moon::Module& program, const FunctionDecl& function) {
     const auto* graph = function.controlFlow.get();
-    const bool hasSelector = function.params.size() == 2;
+    const size_t selectorCount = function.params.size() > 1
+        ? function.params.size() - 1 : 0;
+    const bool hasSelector = selectorCount != 0;
     if (!graph || graph->runtimeRefApplies.size() != 1 ||
-        (function.params.size() != 1 && !hasSelector))
+        function.params.empty() || selectorCount > 2)
         return std::nullopt;
     const auto* referenceType = program.findType(
         function.params.front().type);
@@ -103,11 +107,15 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
         function.params.front().relation !=
             luna::ownership::Relation::SharedBorrow ||
         (hasSelector && [&] {
-            const auto& selector = function.params.back();
-            const auto* type = program.findType(selector.type);
-            return !type || type->kind != TypeKind::Bool ||
-                selector.relation != luna::ownership::Relation::Owned ||
-                selector.usage != luna::ownership::Usage::Copy;
+            for (size_t index = 1; index < function.params.size(); ++index) {
+                const auto& selector = function.params[index];
+                const auto* type = program.findType(selector.type);
+                if (!type || type->kind != TypeKind::Bool ||
+                    selector.relation != luna::ownership::Relation::Owned ||
+                    selector.usage != luna::ownership::Usage::Copy)
+                    return true;
+            }
+            return false;
         }()))
         return std::nullopt;
     moon::Verifier verifier;
@@ -182,10 +190,14 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
     size_t outlinedReturnCount = 0;
     size_t outlinedBranchCount = 0;
     size_t outlinedCompletionCleanupCount = 0;
+    std::unordered_set<size_t> outlinedBranchSelectorIndices;
     moon::BlockId slotBlock;
     const moon::BasicBlock* outlinedBranch = nullptr;
+    std::vector<const moon::BasicBlock*> outlinedBranches;
     const moon::BasicBlock* outlinedReturn = nullptr;
     std::unordered_set<uint32_t> outlinedCompletionCleanupBlocks;
+    std::unordered_map<uint32_t, std::vector<uint32_t>>
+        outlinedCompletionCleanupOwners;
     const auto matchesReturnedOwnerMaterialization =
         [&](const moon::BasicBlock& block,
             const moon::IdentifierExpr& source) {
@@ -226,7 +238,7 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
             return false;
         const auto* active = verifier.activeCleanupsBeforeEdge(block.id);
         if (!active || active->size() != ownerCount ||
-            outlinedCompletionCleanupCount != 0)
+            outlinedCompletionCleanupCount >= 2)
             return false;
 
         std::unordered_set<uint32_t> activeIds;
@@ -235,6 +247,7 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
         std::unordered_set<uint32_t> edgeIds;
         std::unordered_set<uint32_t> allocationIds;
         std::unordered_set<uint32_t> ownerIds;
+        std::vector<uint32_t> orderedOwners;
         for (size_t ownerIndex = 0; ownerIndex < ownerCount; ++ownerIndex) {
             const auto* allocation = dynamic_cast<const moon::AllocateStmt*>(
                 block.operations[ownerIndex * 2].get());
@@ -283,10 +296,13 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
                 !ownerIds.insert(binding->local.value).second ||
                 !edgeIds.insert(cleanupId.value).second)
                 return false;
+            orderedOwners.push_back(binding->local.value);
         }
         if (activeIds != edgeIds) return false;
         ++outlinedCompletionCleanupCount;
         outlinedCompletionCleanupBlocks.insert(block.id.value);
+        outlinedCompletionCleanupOwners.emplace(
+            block.id.value, std::move(orderedOwners));
         return true;
     };
     for (const auto& block : graph->blocks) {
@@ -316,18 +332,35 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
                         block.terminator.operand.get());
                 const auto* conditionLocal = condition
                     ? graph->findLocal(condition->local) : nullptr;
-                const auto* selectorType = hasSelector
-                    ? program.findType(function.params.back().type) : nullptr;
-                if (!hasSelector || ++outlinedBranchCount != 1 ||
+                const auto* selectorType = condition
+                    ? program.findType(condition->type) : nullptr;
+                const auto selector = conditionLocal
+                    ? std::find_if(function.params.begin() + 1,
+                        function.params.end(), [&](const auto& parameter) {
+                            return parameter.name == conditionLocal->name;
+                        })
+                    : function.params.end();
+                if (!hasSelector || selector == function.params.end() ||
                     !block.operations.empty() ||
                     !block.terminator.primary.cleanups.empty() ||
                     !block.terminator.secondary.cleanups.empty() ||
+                    !block.terminator.exitCleanups.empty() ||
                     !condition || !conditionLocal || !selectorType ||
                     condition->type != selectorType->id ||
+                    selector->type != condition->type ||
                     conditionLocal->kind != moon::LocalKind::Parameter ||
-                    conditionLocal->type != selectorType->id)
+                    conditionLocal->type != selectorType->id ||
+                    ++outlinedBranchCount > selectorCount)
                     return std::nullopt;
-                outlinedBranch = &block;
+                const auto selectorIndex = static_cast<size_t>(
+                    selector - function.params.begin());
+                if (!outlinedBranchSelectorIndices.insert(selectorIndex).second)
+                    return std::nullopt;
+                if (selectorIndex == 1) {
+                    if (outlinedBranch) return std::nullopt;
+                    outlinedBranch = &block;
+                }
+                outlinedBranches.push_back(&block);
             } else if (block.terminator.kind ==
                        moon::TerminatorKind::Return) {
                 const auto* returned =
@@ -361,72 +394,138 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
         }
     }
     if (slotCount != 1 || outlinedReturnCount > 1 ||
-        outlinedBranchCount != static_cast<size_t>(hasSelector) ||
+        outlinedBranchCount != selectorCount ||
         (hasSelector && outlinedReturnCount != 1))
         return std::nullopt;
     if (outlinedBranch) {
         enum class BranchOutcome : uint8_t { ReturnsOwner, Completes };
         struct BranchPath {
             BranchOutcome outcome;
-            bool hasCompletionCleanup = false;
+            std::vector<uint32_t> completionCleanupBlocks;
         };
+        std::unordered_set<uint32_t> traversedBranches{
+            outlinedBranch->id.value};
         const auto classifyBranchOutcome = [&](moon::BlockId start)
-            -> std::optional<BranchPath> {
+            -> std::optional<std::vector<BranchPath>> {
+            std::vector<BranchPath> outcomes;
             std::unordered_set<uint32_t> visited;
-            bool hasCompletionCleanup = false;
-            auto current = start;
-            for (;;) {
+            const auto walk = [&](const auto& self, moon::BlockId current,
+                                  std::vector<uint32_t> cleanupBlocks) -> bool {
                 const auto* block = graph->findBlock(current);
-                if (!block) return std::nullopt;
+                if (!block) return false;
                 bool isOutlined = false;
                 for (auto regionId = block->region; !regionId.empty();) {
                     const auto* region = graph->findRegion(regionId);
-                    if (!region) return std::nullopt;
+                    if (!region) return false;
                     if (region->kind == moon::RegionKind::Continuation) {
                         isOutlined = true;
                         break;
                     }
                     regionId = region->parent;
                 }
-                if (!isOutlined)
-                    return BranchPath{BranchOutcome::Completes,
-                                      hasCompletionCleanup};
-                if (!visited.insert(current.value).second)
-                    return std::nullopt;
+                if (!isOutlined) {
+                    outcomes.push_back({BranchOutcome::Completes,
+                                        std::move(cleanupBlocks)});
+                    return true;
+                }
+                if (!visited.insert(current.value).second) return false;
                 if (block == outlinedReturn) {
-                    if (hasCompletionCleanup) return std::nullopt;
-                    return BranchPath{BranchOutcome::ReturnsOwner, false};
+                    const bool valid = cleanupBlocks.empty();
+                    if (valid)
+                        outcomes.push_back({BranchOutcome::ReturnsOwner, {}});
+                    visited.erase(current.value);
+                    return valid;
                 }
                 if (outlinedCompletionCleanupBlocks.count(block->id.value)) {
-                    if (hasCompletionCleanup) return std::nullopt;
-                    hasCompletionCleanup = true;
+                    if (!cleanupBlocks.empty()) {
+                        visited.erase(current.value);
+                        return false;
+                    }
+                    cleanupBlocks.push_back(block->id.value);
                 }
-                if (block->terminator.kind != moon::TerminatorKind::Jump ||
-                    (!block->operations.empty() &&
-                     !outlinedCompletionCleanupBlocks.count(
-                         block->id.value)) ||
-                    (!block->terminator.primary.cleanups.empty() &&
-                     !outlinedCompletionCleanupBlocks.count(
-                         block->id.value)))
-                    return std::nullopt;
-                current = block->terminator.primary.target;
-            }
+                bool valid = false;
+                if (block->terminator.kind == moon::TerminatorKind::Jump) {
+                    const bool cleanupBlock =
+                        outlinedCompletionCleanupBlocks.count(
+                            block->id.value) != 0;
+                    if ((block->operations.empty() || cleanupBlock) &&
+                        (block->terminator.primary.cleanups.empty() ||
+                         cleanupBlock) &&
+                        block->terminator.secondary.cleanups.empty() &&
+                        block->terminator.exitCleanups.empty())
+                        valid = self(self, block->terminator.primary.target,
+                                     std::move(cleanupBlocks));
+                } else if (block->terminator.kind ==
+                               moon::TerminatorKind::Branch &&
+                           std::find(outlinedBranches.begin(),
+                               outlinedBranches.end(), block) !=
+                               outlinedBranches.end() &&
+                           block->operations.empty() &&
+                           block->terminator.primary.cleanups.empty() &&
+                           block->terminator.secondary.cleanups.empty() &&
+                           block->terminator.exitCleanups.empty()) {
+                    traversedBranches.insert(block->id.value);
+                    auto secondaryCleanups = cleanupBlocks;
+                    valid = self(self, block->terminator.primary.target,
+                                 std::move(cleanupBlocks)) &&
+                        self(self, block->terminator.secondary.target,
+                             std::move(secondaryCleanups));
+                }
+                visited.erase(current.value);
+                return valid;
+            };
+            if (!walk(walk, start, {})) return std::nullopt;
+            return outcomes;
         };
         const auto primary = classifyBranchOutcome(
             outlinedBranch->terminator.primary.target);
         const auto secondary = classifyBranchOutcome(
             outlinedBranch->terminator.secondary.target);
         if (!primary || !secondary ||
-            primary->outcome == secondary->outcome)
+            traversedBranches.size() != outlinedBranches.size())
             return std::nullopt;
-        const auto& returning = primary->outcome ==
-                BranchOutcome::ReturnsOwner ? *primary : *secondary;
-        const auto& completing = primary->outcome ==
-                BranchOutcome::Completes ? *primary : *secondary;
-        if (returning.hasCompletionCleanup ||
-            (outlinedCompletionCleanupCount == 1) !=
-                completing.hasCompletionCleanup)
+        const auto returnsOwnerOnly = [](const auto& paths) {
+            return paths.size() == 1 &&
+                paths.front().outcome == BranchOutcome::ReturnsOwner &&
+                paths.front().completionCleanupBlocks.empty();
+        };
+        const auto completesOnly = [](const auto& paths) {
+            return !paths.empty() && std::all_of(paths.begin(), paths.end(),
+                [](const auto& path) {
+                    return path.outcome == BranchOutcome::Completes;
+                });
+        };
+        const std::vector<BranchPath>* completionPaths = nullptr;
+        if (returnsOwnerOnly(*primary) && completesOnly(*secondary))
+            completionPaths = &*secondary;
+        else if (returnsOwnerOnly(*secondary) && completesOnly(*primary))
+            completionPaths = &*primary;
+        else
             return std::nullopt;
+
+        if (selectorCount == 1) {
+            if (completionPaths->size() != 1 ||
+                completionPaths->front().completionCleanupBlocks.size() !=
+                    outlinedCompletionCleanupCount)
+                return std::nullopt;
+        } else {
+            if (selectorCount != 2 || completionPaths->size() != 2 ||
+                outlinedCompletionCleanupCount != 2)
+                return std::nullopt;
+            std::array<std::vector<uint32_t>, 2> ownerSets;
+            for (size_t index = 0; index < completionPaths->size(); ++index) {
+                const auto& cleanupBlocks =
+                    (*completionPaths)[index].completionCleanupBlocks;
+                if (cleanupBlocks.size() != 1) return std::nullopt;
+                const auto found = outlinedCompletionCleanupOwners.find(
+                    cleanupBlocks.front());
+                if (found == outlinedCompletionCleanupOwners.end())
+                    return std::nullopt;
+                ownerSets[index] = found->second;
+                std::sort(ownerSets[index].begin(), ownerSets[index].end());
+            }
+            if (ownerSets[0] == ownerSets[1]) return std::nullopt;
+        }
     }
     if (outlinedReturnCount == 1)
         plan.cleanupPendingReturnByBlock[slotBlock.value] = true;
@@ -1208,17 +1307,22 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             });
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     const bool privateRefApplySelector = executable && privateRefApply &&
-        function.params.size() == 2 &&
+        function.params.size() >= 2 && function.params.size() <= 3 &&
         [&program, &function] {
             const auto& reference = function.params.front();
-            const auto& selector = function.params.back();
             const auto* refType = program.findType(reference.type);
-            const auto* selectorType = program.findType(selector.type);
             return refType && refType->kind == TypeKind::RuntimeFragmentRef &&
                 reference.relation == luna::ownership::Relation::SharedBorrow &&
-                selectorType && selectorType->kind == TypeKind::Bool &&
-                selector.relation == luna::ownership::Relation::Owned &&
-                selector.usage == luna::ownership::Usage::Copy;
+                std::all_of(function.params.begin() + 1,
+                    function.params.end(), [&](const auto& selector) {
+                        const auto* selectorType =
+                            program.findType(selector.type);
+                        return selectorType &&
+                            selectorType->kind == TypeKind::Bool &&
+                            selector.relation ==
+                                luna::ownership::Relation::Owned &&
+                            selector.usage == luna::ownership::Usage::Copy;
+                    });
         }();
     // A disposable test entry may add one Copy selector to the two owned
     // Refs. The ordinary proof and publication paths do not accept it.
@@ -1241,6 +1345,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
     const bool privateRefApplySelector = false;
     const bool privateOwnedPairSelector = false;
 #endif
+    const size_t privateRefApplySelectorCount = privateRefApplySelector
+        ? function.params.size() - 1 : 0;
     const bool privateOwnedRefProbe =
         privateOwnedPair || privateOwnedPairSelector;
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
@@ -1267,12 +1373,17 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             failure = "private Ref apply proof requires an explicit Fragment context";
             return false;
         }
-        if (function.params.empty() || function.params.size() > 2) {
-            failure = "private Ref apply proof requires one or two borrowed Ref parameters";
+        if (function.params.empty() ||
+            function.params.size() > (privateRefApplySelector ? 3u : 2u)) {
+            failure = "private Ref apply proof has an unsupported parameter count";
             return false;
         }
         const auto borrowedCount = function.params.size() -
-            static_cast<size_t>(privateRefApplySelector);
+            privateRefApplySelectorCount;
+        if (privateRefApplySelector && borrowedCount != 1) {
+            failure = "private Ref selector proof requires one borrowed Ref";
+            return false;
+        }
         for (size_t index = 0; index < borrowedCount; ++index) {
             const auto& parameter = function.params[index];
             const auto* type = program.findType(parameter.type);
@@ -1320,8 +1431,13 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         parameters.push_back(proof.mHelpers->ptrTy());
     parameters.insert(parameters.end(), function.params.size(),
                       proof.mHelpers->ptrTy());
-    if (privateOwnedPairSelector || privateRefApplySelector)
+    if (privateOwnedPairSelector)
         parameters.back() = proof.mHelpers->boolTy();
+    for (size_t index = function.params.size() -
+            privateRefApplySelectorCount;
+         index < function.params.size(); ++index)
+        parameters[(function.requiresFragmentContext ? 1u : 0u) + index] =
+            proof.mHelpers->boolTy();
     const bool privateUnitStatusBody = privateRefApply &&
         returnType->kind == TypeKind::Unit &&
         function.params.size() <= 2;

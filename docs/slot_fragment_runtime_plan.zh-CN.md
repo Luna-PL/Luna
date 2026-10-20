@@ -1883,16 +1883,16 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    尚存的 `resource`。JIT 精确验证派生失败 Drop 两者、分派失败只 Drop 剩余资源，
    成功路径则按既有协议提交返回 owner。源码所有权检查现会检查 Slot 参数表达式，
    因而参数求值后的 move 会进入密封 CFG 的清理快照。这仍只是私有证明：状态副本
-   限于一个 Ref Apply 和一个 Slot；outline 仅接受无操作 Jump、一个 owned-Err Return，
-   以及一个由复制 bool 参数控制的分支。分支块无操作且无 edge cleanup，一支到达唯一匹配的
-   Return，另一支正常完成；完成路径最多包含一个构造一至两个 marker-only owner 的块，并通过唯一 Drop
-   edge 离开。该 edge 的 active cleanup 集必须恰好包含这些 owner，且按逆构造顺序列出；局部操作必须是匹配的
+   限于一个 Ref Apply 和一个 Slot；outline 仅接受无操作 Jump、一个 owned-Err Return，以及复制 bool
+   参数控制的返回／完成分支。完成支可再包含一个由复制 bool 参数控制的内层分支。两个分支块均无操作且无
+   edge cleanup；Err 路径到达唯一匹配的 Return，两条完成路径各通过一个局部 cleanup edge 离开。每条 edge
+   的 active cleanup 集必须恰好包含该路径构造的 marker-only owner，并按逆构造顺序列出；局部操作必须是匹配的
    allocation 与 binding。返回暂存有初始化位，先写值再置位；分派失败只在该位为真时加载并 Drop 暂存值。
    抛出异常且未 resume 的 handler 证明未写返回值时不会读取未初始化暂存；callback 返回后重复
    resume 失败证明未提交 owner 恰好 Drop 一次。正常成功路径仍会交接 owner，标量 callback 内
    创建 owner 的反例仍被拒绝。JIT 分别运行两个 selector 值：Err 支的 marker `59` owner 在
-   分派失败后恰好 Drop 一次；完成支的两个 owner 在每次完成时均按 `63, 61` 顺序 Drop，覆盖分派失败、恢复和正常执行。
-   下一步验证 owner 构造与 cleanup 集随完成路径变化时仍能精确匹配。更广控制流和调用方输出预检未完成前，
+   分派失败后恰好 Drop 一次；完成路径分别验证一个 owner 的 `61` 和两个 owner 的 `63, 61` Drop 顺序，覆盖分派失败、恢复和正常执行。
+   下一步验证跨两条完成路径共享的 owner，并证明各路径先清理局部 owner、再清理共享 owner。更广控制流和调用方输出预检未完成前，
    公开宿主转移与 v3 失败状态继续关闭。Windows 全量构建、78／78 CTest 和
    ASan／UBSan canonical JIT 测试均通过。
    每条准入的出口都须在 apply 局部清理之后、借用的
