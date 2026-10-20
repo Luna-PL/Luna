@@ -27,6 +27,7 @@
 #include <iostream>
 #include <optional>
 #include <sstream>
+#include <unordered_set>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Transforms/Utils/Cloning.h>
@@ -63,7 +64,7 @@ extern "C" void luna_private_ref_drop_probe(int32_t marker) {
         ++privateRefJitReturnedDropProbeCalls;
         privateRefJitFromResourceDropOrder.push_back(marker);
         privateRefJitRootDropOrder.push_back(marker);
-    } else if (marker == 61) {
+    } else if (marker == 61 || marker == 63) {
         ++privateRefJitBranchLocalDropProbeCalls;
         privateRefJitBranchLocalDropOrder.push_back(marker);
     }
@@ -4732,7 +4733,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "        let resource = new ReturnedResource(59);\n"
         "        return Err::<i32, ReturnedResource>(move resource);\n"
         "      } else {\n"
-        "        let completion = new ReturnedResource(61);\n"
+        "        let first_completion = new ReturnedResource(61);\n"
+        "        let second_completion = new ReturnedResource(63);\n"
         "      }\n"
         "    }\n"
         "  }\n"
@@ -7720,19 +7722,34 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         if (!outlined || block.terminator.kind != moon::TerminatorKind::Jump ||
             block.terminator.primary.cleanups.empty())
             continue;
-        if (block.terminator.primary.cleanups.size() != 1)
-            return fail("branched callback cleanup edge has multiple owners");
-        const auto* cleanup = branchedCleanupGraph.findCleanup(
-            block.terminator.primary.cleanups.front());
         const auto* active = branchedCleanupWitness.activeCleanupsBeforeEdge(
             block.id);
-        if (!cleanup || !active || active->size() != 1 ||
-            active->front() != cleanup->id ||
-            cleanup->kind != moon::CleanupKind::Value ||
-            cleanup->action != luna::ownership::CleanupAction::Drop ||
-            cleanup->place.root.empty() ||
-            !cleanup->place.projections.empty())
-            return fail("branched callback cleanup edge lost its local Drop");
+        if (block.operations.size() != 4 ||
+            block.terminator.primary.cleanups.size() != 2 ||
+            !active || active->size() != 2)
+            return fail("branched callback cleanup edge lost its two owners");
+        std::unordered_set<uint32_t> activeIds;
+        for (const auto cleanupId : *active)
+            activeIds.insert(cleanupId.value);
+        for (size_t ownerIndex = 0; ownerIndex < 2; ++ownerIndex) {
+            const auto* binding = dynamic_cast<const moon::LetStmt*>(
+                block.operations[ownerIndex * 2 + 1].get());
+            const auto cleanupId = block.terminator.primary.cleanups[
+                1 - ownerIndex];
+            const auto* cleanup = branchedCleanupGraph.findCleanup(cleanupId);
+            const auto* owner = binding
+                ? branchedCleanupGraph.findLocal(binding->local) : nullptr;
+            if (!binding || !cleanup || !owner ||
+                cleanup->place.root != binding->local ||
+                owner->name != (ownerIndex == 0
+                    ? "first_completion" : "second_completion") ||
+                cleanup->kind != moon::CleanupKind::Value ||
+                cleanup->action != luna::ownership::CleanupAction::Drop ||
+                cleanup->place.root.empty() ||
+                !cleanup->place.projections.empty() ||
+                !activeIds.count(cleanup->id.value))
+                return fail("branched callback cleanup edge lost reverse Drop order");
+        }
         ++branchedCleanupEdges;
     }
     if (branchedCleanupEdges != 1)
@@ -7746,14 +7763,14 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             privateRefJitError, 1, false, 1, false, false,
             {1}, {}, std::pair<bool, int32_t>{true, 0}, std::nullopt,
             false, false, false, nullptr, 0, false, false,
-            false, false, std::nullopt, true, 2, false, 0, true, 0)) {
+            false, false, std::nullopt, true, 4, false, 0, true, 0)) {
         std::cerr << privateRefJitError << '\n';
-        return fail("normal callback branch failed to clean its local owner");
+        return fail("normal callback branch failed to clean its local owners");
     }
-    if (privateRefJitBranchLocalDropProbeCalls -
-            branchedLocalDropCallsBefore != 4 ||
+    if (privateRefJitBranchLocalDropProbeCalls !=
+            branchedLocalDropCallsBefore + 8 ||
         privateRefJitBranchLocalDropOrder !=
-            std::vector<int32_t>{61, 61, 61, 61} ||
+            std::vector<int32_t>{63, 61, 63, 61, 63, 61, 63, 61} ||
         !privateRefJitDropProbeValid)
         return fail("callback local owner was not dropped once on each completion");
     const auto localDropsBeforeErrBranch =

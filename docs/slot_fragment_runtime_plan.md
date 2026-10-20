@@ -2661,12 +2661,13 @@ has no operations or edge cleanups, and its paths resolve separately to the
 single matching Return and normal completion. JIT probes exercise both values:
 the Err arm's pending owner is Dropped once after dispatch failure, while the
 completion arm leaves the unwritten cell untouched. Next, consider a callback
-branch with one narrowly proven local cleanup on its completing arm. That arm
-may construct exactly one marker-only owner and leave through one Drop cleanup
-edge whose active set contains only that owner. JIT checks marker `61` on each
+branch with a narrowly proven local cleanup on its completing arm. That arm
+may construct one or two marker-only owners and leave through one Drop cleanup
+edge whose active set contains exactly those owners. The edge must list Drops
+in reverse construction order. JIT checks the `63, 61` transcript on each
 completion, including injected dispatch failure and recovery; the Err arm's
-marker `59` return remains independent. Next, test two completion-arm owners
-and prove their reverse-construction cleanup order. Public transfer and v3
+marker `59` return remains independent. Next, test completion paths with
+path-varying owner construction and cleanup sets. Public transfer and v3
 failure-status gates remain closed pending broader control-flow and untouched
 caller-output proofs. The Windows full build and 78/78 CTest suite pass, as
 does the ASan/UBSan canonical JIT test.

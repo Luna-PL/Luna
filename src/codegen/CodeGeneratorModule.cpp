@@ -217,57 +217,75 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
     };
     const auto matchesOutlinedCompletionCleanup =
         [&](const moon::BasicBlock& block) {
-        if (!hasSelector || block.operations.size() != 2 ||
-            block.terminator.primary.cleanups.size() != 1 ||
+        const size_t ownerCount = block.operations.size() / 2;
+        if (!hasSelector || ownerCount == 0 || ownerCount > 2 ||
+            block.operations.size() != ownerCount * 2 ||
+            block.terminator.primary.cleanups.size() != ownerCount ||
             !block.terminator.secondary.cleanups.empty() ||
             !block.terminator.exitCleanups.empty())
             return false;
-        const auto* allocation = dynamic_cast<const moon::AllocateStmt*>(
-            block.operations[0].get());
-        const auto* binding = dynamic_cast<const moon::LetStmt*>(
-            block.operations[1].get());
-        const auto* initialized = binding
-            ? dynamic_cast<const moon::InitAllocationExpr*>(
-                  binding->initializer.get())
-            : nullptr;
-        const auto* marker = initialized &&
-                initialized->elements.size() == 1 &&
-                initialized->elements.front().index == 0
-            ? dynamic_cast<const moon::IntLiteralExpr*>(
-                  initialized->elements.front().value.get())
-            : nullptr;
-        const auto* allocationLocal = allocation
-            ? graph->findLocal(allocation->local) : nullptr;
-        const auto* ownerLocal = binding
-            ? graph->findLocal(binding->local) : nullptr;
-        const auto* cleanup = graph->findCleanup(
-            block.terminator.primary.cleanups.front());
         const auto* active = verifier.activeCleanupsBeforeEdge(block.id);
-        if (!allocation || !binding || !initialized || !marker ||
-            !allocationLocal || !ownerLocal || !cleanup || !active ||
-            allocationLocal->kind != moon::LocalKind::Allocation ||
-            ownerLocal->kind != moon::LocalKind::Binding ||
-            allocationLocal->scope != ownerLocal->scope ||
-            block.scope != ownerLocal->scope ||
-            allocation->local == binding->local ||
-            allocation->allocatedType != errorPayload->id ||
-            allocation->storage != HeapStorageKind::Unique ||
-            initialized->allocation != allocation->local ||
-            initialized->allocatedType != errorPayload->id ||
-            initialized->storage != HeapStorageKind::Unique ||
-            initialized->type != errorPayload->id ||
-            binding->type != errorPayload->id ||
-            marker->type != markerType->id ||
-            cleanup->scope != ownerLocal->scope ||
-            cleanup->place.root != binding->local ||
-            !cleanup->place.projections.empty() ||
-            cleanup->type != errorPayload->id ||
-            cleanup->kind != moon::CleanupKind::Value ||
-            cleanup->action != luna::ownership::CleanupAction::Drop ||
-            cleanup->guard || active->size() != 1 ||
-            active->front() != cleanup->id ||
-            ++outlinedCompletionCleanupCount != 1)
+        if (!active || active->size() != ownerCount ||
+            outlinedCompletionCleanupCount != 0)
             return false;
+
+        std::unordered_set<uint32_t> activeIds;
+        for (const auto cleanupId : *active)
+            if (!activeIds.insert(cleanupId.value).second) return false;
+        std::unordered_set<uint32_t> edgeIds;
+        std::unordered_set<uint32_t> allocationIds;
+        std::unordered_set<uint32_t> ownerIds;
+        for (size_t ownerIndex = 0; ownerIndex < ownerCount; ++ownerIndex) {
+            const auto* allocation = dynamic_cast<const moon::AllocateStmt*>(
+                block.operations[ownerIndex * 2].get());
+            const auto* binding = dynamic_cast<const moon::LetStmt*>(
+                block.operations[ownerIndex * 2 + 1].get());
+            const auto* initialized = binding
+                ? dynamic_cast<const moon::InitAllocationExpr*>(
+                      binding->initializer.get())
+                : nullptr;
+            const auto* marker = initialized &&
+                    initialized->elements.size() == 1 &&
+                    initialized->elements.front().index == 0
+                ? dynamic_cast<const moon::IntLiteralExpr*>(
+                      initialized->elements.front().value.get())
+                : nullptr;
+            const auto* allocationLocal = allocation
+                ? graph->findLocal(allocation->local) : nullptr;
+            const auto* ownerLocal = binding
+                ? graph->findLocal(binding->local) : nullptr;
+            const auto cleanupId = block.terminator.primary.cleanups[
+                ownerCount - ownerIndex - 1];
+            const auto* cleanup = graph->findCleanup(cleanupId);
+            if (!allocation || !binding || !initialized || !marker ||
+                !allocationLocal || !ownerLocal || !cleanup ||
+                allocationLocal->kind != moon::LocalKind::Allocation ||
+                ownerLocal->kind != moon::LocalKind::Binding ||
+                allocationLocal->scope != ownerLocal->scope ||
+                block.scope != ownerLocal->scope ||
+                allocation->local == binding->local ||
+                allocation->allocatedType != errorPayload->id ||
+                allocation->storage != HeapStorageKind::Unique ||
+                initialized->allocation != allocation->local ||
+                initialized->allocatedType != errorPayload->id ||
+                initialized->storage != HeapStorageKind::Unique ||
+                initialized->type != errorPayload->id ||
+                binding->type != errorPayload->id ||
+                marker->type != markerType->id ||
+                cleanup->scope != ownerLocal->scope ||
+                cleanup->place.root != binding->local ||
+                !cleanup->place.projections.empty() ||
+                cleanup->type != errorPayload->id ||
+                cleanup->kind != moon::CleanupKind::Value ||
+                cleanup->action != luna::ownership::CleanupAction::Drop ||
+                cleanup->guard ||
+                !allocationIds.insert(allocation->local.value).second ||
+                !ownerIds.insert(binding->local.value).second ||
+                !edgeIds.insert(cleanupId.value).second)
+                return false;
+        }
+        if (activeIds != edgeIds) return false;
+        ++outlinedCompletionCleanupCount;
         outlinedCompletionCleanupBlocks.insert(block.id.value);
         return true;
     };
