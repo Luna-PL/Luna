@@ -1857,8 +1857,9 @@ inside it. Both failure exits Drop the inner owner before the outer owner;
 successful return transfers the inner owner and Drops the outer owner.
 The verifier now reports active canonical cleanup rows at Jump and Slot
 boundaries. Tests distinguish a live owner before the first dispatch from an
-owner constructed only after dispatch. Broader callback return effects still
-need an uncommitted-owner cleanup proof before status admission.
+owner constructed only after dispatch. The first bounded callback-return case
+now has an uncommitted-owner cleanup proof; richer callback return control
+flow remains outside status admission.
 The private loaded Result adapter now also has a typed host call. It checks
 output cells before ingress, pins the Runtime-issued parent and borrowed Ref,
 checks the exact frozen Slot/Contract, and retains those pins through the
@@ -2641,15 +2642,23 @@ not a public ABI decision or stable-release approval:
    `resource` at Apply entry; evaluating the Slot argument consumes `source`, so
    only `resource` remains active at dispatch. Its private JIT probe drops both
    locals on derivation failure, only the remaining resource on dispatch failure,
-   and preserves the returned owner on the successful transfer path. The sealed
-   ownership checker now checks Slot arguments so their moves update the active
-   cleanup snapshot before the dispatch boundary. Status clones remain test-only
-   and require exactly one Ref Apply, one Slot, and operation-free Jump-only
-   outlined blocks with no edge cleanup. The next proof must cover an outlined
-   callback that moves an owner into return storage before dispatch reports
-   failure; that uncommitted owner needs its own verified cleanup path. Keep the
-   public transfer and v3 status gates closed until that proof and untouched
-   caller-output checks are complete.
+and preserves the returned owner on the successful transfer path. The sealed
+ownership checker now checks Slot arguments so their moves update the active
+cleanup snapshot before the dispatch boundary. Status clones remain test-only
+and require exactly one Ref Apply, one Slot, and operation-free Jump-only
+outlined blocks with no edge cleanup, except for one narrow owned-Err outline:
+one callback Return moves a marker-only resource into `Err`, using its matched
+allocation and binding operations. Its return cell has an initialized bit;
+the callback stores the value before setting the bit, and dispatch failure
+loads and Drops it only when set. A pre-resume throwing handler proves the
+unwritten cell is ignored; repeated resume after the callback Return proves
+the pending owner is Dropped exactly once. The ordinary success path still
+transfers the owner, and the scalar callback-owner counterexample remains
+rejected. Next, consider a branched callback that can either return an owned
+Err or complete without writing the return cell, with per-arm cleanup proof.
+Public transfer and v3 failure-status gates remain closed pending broader
+control-flow and untouched caller-output proofs. The Windows full build and
+78/78 CTest suite pass, as does the ASan/UBSan canonical JIT test.
    The MoonIR ownership verifier now exposes read-only active cleanup rows at
    verified Jump and RuntimeSlot boundaries, after local operations and Slot
    argument evaluation. The dispatched owned-Err fixture has a live `input`

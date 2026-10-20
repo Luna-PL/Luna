@@ -996,13 +996,15 @@ void CodeGenerator::generateControlFlowBody(
                 // materializes the source-level return value.
                 std::function<void(const moon::BasicBlock&, const moon::Terminator&,
                                    llvm::Function*, const RuntimeCompletionTarget&, llvm::Type*,
-                                   llvm::Value*, const std::vector<llvm::Value*>&,
+                                   llvm::Value*, llvm::Value*,
+                                   const std::vector<llvm::Value*>&,
                                    const std::function<void()>&)>
                     emitRuntimeSlot;
                 emitRuntimeSlot = [&](const moon::BasicBlock& block,
                                       const moon::Terminator& terminator, llvm::Function* func,
                                       const RuntimeCompletionTarget& completionTarget,
                                       llvm::Type* sourceReturnType, llvm::Value* inheritedReturn,
+                                      llvm::Value* inheritedReturnWritten,
                                       const std::vector<llvm::Value*>& inheritedRefContextOwners,
                                       const std::function<void()>& propagateEscape) {
                     if (!mCurrentFragmentContext) {
@@ -1036,8 +1038,17 @@ void CodeGenerator::generateControlFlowBody(
                                                                    "runtime.slot.arguments");
                     mBuilder->CreateStore(arguments, argumentStorage);
 
+                    const bool cleanupPendingReturn =
+                        block.id.value <
+                            mPrivateRefResultPendingReturnByBlock.size() &&
+                        mPrivateRefResultPendingReturnByBlock[
+                            block.id.value];
+                    const bool trackReturnWritten =
+                        inheritedReturnWritten || cleanupPendingReturn;
+                    const unsigned captureFieldBase =
+                        trackReturnWritten ? 3u : 2u;
                     std::vector<llvm::Type*> frameFields(
-                        continuationPlan.captures.size() + 2 +
+                        continuationPlan.captures.size() + captureFieldBase +
                             inheritedRefContextOwners.size(),
                         mHelpers->ptrTy());
                     auto* frameType = llvm::StructType::get(*mCtx, frameFields);
@@ -1049,12 +1060,28 @@ void CodeGenerator::generateControlFlowBody(
                     if (!sourceReturnType->isVoidTy() && !escapedReturn)
                         escapedReturn = createEntryBlockAlloca(func, sourceReturnType,
                                                                "runtime.slot.escaped.return");
+                    llvm::Value* escapedReturnWritten = inheritedReturnWritten;
+                    if (trackReturnWritten && !sourceReturnType->isVoidTy() &&
+                        !escapedReturnWritten) {
+                        escapedReturnWritten = createEntryBlockAlloca(
+                            func, mHelpers->boolTy(),
+                            "runtime.slot.return.written");
+                        mBuilder->CreateStore(
+                            llvm::ConstantInt::getFalse(*mCtx),
+                            escapedReturnWritten);
+                    }
                     mBuilder->CreateStore(
                         escapedReturn ? escapedReturn
                                       : llvm::ConstantPointerNull::get(
                                             llvm::cast<llvm::PointerType>(mHelpers->ptrTy())),
                         mBuilder->CreateStructGEP(frameType, frame, 1,
                                                   "runtime.slot.frame.return"));
+                    if (trackReturnWritten)
+                        mBuilder->CreateStore(
+                            escapedReturnWritten,
+                            mBuilder->CreateStructGEP(
+                                frameType, frame, 2,
+                                "runtime.slot.frame.return.written"));
                     for (size_t index = 0; index < continuationPlan.captures.size(); ++index) {
                         const auto local = continuationPlan.captures[index];
                         if (local.value >= mCanonicalLocals.size() ||
@@ -1065,7 +1092,8 @@ void CodeGenerator::generateControlFlowBody(
                         mBuilder->CreateStore(
                             mCanonicalLocals[local.value],
                             mBuilder->CreateStructGEP(frameType, frame,
-                                                      static_cast<unsigned>(index + 2),
+                                                      static_cast<unsigned>(
+                                                          index + captureFieldBase),
                                                       "runtime.slot.frame.capture"));
                     }
                     for (size_t index = 0;
@@ -1075,7 +1103,8 @@ void CodeGenerator::generateControlFlowBody(
                             mBuilder->CreateStructGEP(
                                 frameType, frame,
                                 static_cast<unsigned>(
-                                    continuationPlan.captures.size() + 2 + index),
+                                    continuationPlan.captures.size() +
+                                        captureFieldBase + index),
                                 "runtime.slot.frame.ref.context.owner"));
 
                     auto* callbackType =
@@ -1116,7 +1145,8 @@ void CodeGenerator::generateControlFlowBody(
                             mBuilder->CreateStructGEP(
                                 frameType, callback->getArg(0),
                                 static_cast<unsigned>(
-                                    continuationPlan.captures.size() + 2 + index),
+                                    continuationPlan.captures.size() +
+                                        captureFieldBase + index),
                                 "runtime.slot.ref.context.owner.address"),
                             "runtime.slot.ref.context.owner"));
                     std::vector<llvm::Value*> callbackOwnerByRegion(
@@ -1193,7 +1223,8 @@ void CodeGenerator::generateControlFlowBody(
                         auto* source = mBuilder->CreateLoad(
                             mHelpers->ptrTy(),
                             mBuilder->CreateStructGEP(frameType, callback->getArg(0),
-                                                      static_cast<unsigned>(index + 2),
+                                                      static_cast<unsigned>(
+                                                          index + captureFieldBase),
                                                       "runtime.slot.capture.address"),
                             "runtime.slot.capture");
                         auto* storage = mCanonicalLocals[local.value];
@@ -1340,7 +1371,8 @@ void CodeGenerator::generateControlFlowBody(
                             auto* destination = mBuilder->CreateLoad(
                                 mHelpers->ptrTy(),
                                 mBuilder->CreateStructGEP(frameType, callback->getArg(0),
-                                                          static_cast<unsigned>(index + 2),
+                                                          static_cast<unsigned>(
+                                                              index + captureFieldBase),
                                                           "runtime.slot.capture.writeback.address"),
                                 "runtime.slot.capture.writeback");
                             auto* storage = mCanonicalLocals[local.value];
@@ -1530,8 +1562,17 @@ void CodeGenerator::generateControlFlowBody(
                                 mBuilder->CreateStructGEP(frameType, callback->getArg(0), 1,
                                                           "runtime.slot.nested.return.address"),
                                 "runtime.slot.nested.return");
+                            llvm::Value* returnWritten = nullptr;
+                            if (trackReturnWritten)
+                                returnWritten = mBuilder->CreateLoad(
+                                    mHelpers->ptrTy(),
+                                    mBuilder->CreateStructGEP(frameType,
+                                        callback->getArg(0), 2,
+                                        "runtime.slot.nested.return.written.address"),
+                                    "runtime.slot.nested.return.written");
                             emitRuntimeSlot(*continuationBlock, callbackTerminator, callback,
                                             outlinedEdgeTarget, sourceReturnType, returnStorage,
+                                            returnWritten,
                                             callbackOwnersFor(continuationBlock->id),
                                             [&]() {
                                                 emitCaptureWriteback();
@@ -1559,10 +1600,23 @@ void CodeGenerator::generateControlFlowBody(
                                     "runtime.slot.return");
                                 if (!returnValue)
                                     error("runtime Slot outlined return has no value");
-                                else
+                                else {
                                     mBuilder->CreateStore(
                                         coerceCallArgument(returnValue, sourceReturnType),
                                         destination);
+                                    if (trackReturnWritten) {
+                                        auto* written = mBuilder->CreateLoad(
+                                            mHelpers->ptrTy(),
+                                            mBuilder->CreateStructGEP(
+                                                frameType,
+                                                callback->getArg(0), 2,
+                                                "runtime.slot.return.written.address"),
+                                            "runtime.slot.return.written");
+                                        mBuilder->CreateStore(
+                                            llvm::ConstantInt::getTrue(*mCtx),
+                                            written);
+                                    }
+                                }
                             }
                             mBuilder->CreateRet(llvm::ConstantInt::get(
                                 mHelpers->i32Ty(), LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1));
@@ -1601,7 +1655,12 @@ void CodeGenerator::generateControlFlowBody(
                          llvm::ConstantInt::get(mHelpers->i64Ty(), argumentRecord->valueAlignment),
                          argumentStorage, callback, frame},
                         "runtime.slot.dispatch");
-                    auto* failed = llvm::BasicBlock::Create(*mCtx, "runtime.slot.failed", func);
+                    auto* failed = llvm::BasicBlock::Create(
+                        *mCtx,
+                        cleanupPendingReturn
+                            ? "runtime.slot.pending.return.failure"
+                            : "runtime.slot.failed",
+                        func);
                     auto* escaped = llvm::BasicBlock::Create(*mCtx, "runtime.slot.escaped", func);
                     auto* nonCompleted =
                         llvm::BasicBlock::Create(*mCtx, "runtime.slot.non_completed", func);
@@ -1642,6 +1701,46 @@ void CodeGenerator::generateControlFlowBody(
                             LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1));
                     else if (privateResultStatus) {
                         if (block.id.value <
+                                mPrivateRefResultPendingReturnByBlock.size() &&
+                            mPrivateRefResultPendingReturnByBlock[
+                                block.id.value]) {
+                            TypePtr pendingType = resolveType(
+                                mPrivateRefResultPendingReturnType);
+                            if (!pendingType || !escapedReturn ||
+                                !escapedReturnWritten) {
+                                error("private Result pending return cleanup lost its typed initialized cell");
+                            } else {
+                                auto* written = mBuilder->CreateLoad(
+                                    mHelpers->boolTy(), escapedReturnWritten,
+                                    "runtime.slot.return.was.written");
+                                auto* cleanupPendingReturn =
+                                    llvm::BasicBlock::Create(
+                                        *mCtx,
+                                        "private.result.pending.return.cleanup",
+                                        func);
+                                auto* afterPendingReturnCleanup =
+                                    llvm::BasicBlock::Create(
+                                        *mCtx,
+                                        "runtime.slot.failed",
+                                        func);
+                                mBuilder->CreateCondBr(
+                                    written, cleanupPendingReturn,
+                                    afterPendingReturnCleanup);
+                                mBuilder->SetInsertPoint(cleanupPendingReturn);
+                                auto* pendingValue = mBuilder->CreateLoad(
+                                    sourceReturnType, escapedReturn,
+                                    "runtime.slot.pending.return.value");
+                                emitOwnedPayloadCleanup(
+                                    pendingValue, pendingType,
+                                    "private.result.pending.return");
+                                if (!mBuilder->GetInsertBlock()->getTerminator())
+                                    mBuilder->CreateBr(
+                                        afterPendingReturnCleanup);
+                                mBuilder->SetInsertPoint(
+                                    afterPendingReturnCleanup);
+                            }
+                        }
+                        if (block.id.value <
                             mPrivateRefResultFailureCleanupsByBlock.size()) {
                             for (const auto cleanupId :
                                  mPrivateRefResultFailureCleanupsByBlock[
@@ -1669,7 +1768,7 @@ void CodeGenerator::generateControlFlowBody(
                 emitRuntimeSlot(block, terminator, func, edgeTarget,
                                 mPrivateRefUnitStatusBody
                                     ? mHelpers->voidTy()
-                                    : func->getReturnType(), nullptr,
+                                    : func->getReturnType(), nullptr, nullptr,
                                 contextOwnersFor(block.id),
                                 {});
                 break;

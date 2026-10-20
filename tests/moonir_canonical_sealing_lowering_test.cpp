@@ -90,6 +90,7 @@ bool privateRefJitPayloadValid = true;
 std::vector<int32_t> privateRefJitObservedArguments;
 std::vector<unsigned> privateRefJitObservedSources;
 bool privateRefJitInjectRepeatedResumeFailure = false;
+bool privateRefJitThrowBeforeResume = false;
 int32_t privateRefJitRepeatedResumeFailureValue = 0;
 int32_t privateRefJitRepeatedResumeStatus = 0;
 std::array<const char*, 2> privateRefJitExpectedSlotIds{};
@@ -132,6 +133,7 @@ void executePrivateRefJitFragmentFrom(unsigned source, void* activation) {
             privateRefJitLeaseLiveAfterCallerRelease =
                 !privateRefJitLeaseToObserve->expired();
     }
+    if (privateRefJitThrowBeforeResume) throw 1;
     privateRefJitResumeStatus =
         luna_runtime_fragment_activation_resume_v1(activation);
     if (privateRefJitResumeStatus ==
@@ -303,7 +305,9 @@ bool exercisePrivateRefApplyJit(
     bool exerciseStatusDispatchFailure = false,
     unsigned dispatchFailureDropCalls = 0,
     bool expectNoStatusBody = false,
-    std::optional<unsigned> derivationFailureDropCalls = std::nullopt) {
+    std::optional<unsigned> derivationFailureDropCalls = std::nullopt,
+    bool injectPreResumeDispatchFailure = false,
+    unsigned preResumeDispatchFailureDropCalls = 0) {
     const moon::SlotDecl* slot = nullptr;
     const moon::SlotDecl* secondSlot = nullptr;
     for (const auto& declaration : module.declarations)
@@ -328,6 +332,8 @@ bool exercisePrivateRefApplyJit(
         (exerciseStatusDispatchFailure &&
          (!expectedResult ||
           expectedDispatches != 1 || expectedValues.size() != 1)) ||
+        (injectPreResumeDispatchFailure &&
+         !exerciseStatusDispatchFailure) ||
         (branchSelector && twoBorrowedReferences) ||
         (exerciseSelectorFailure && (!branchSelector || *branchSelector)) ||
         (failSecondDispatch &&
@@ -1199,6 +1205,54 @@ bool exercisePrivateRefApplyJit(
     privateRefJitPayloadValid = true;
     privateRefJitResumeStatus = -1;
     if (exerciseStatusDispatchFailure) {
+        if (injectPreResumeDispatchFailure) {
+            // A fragment can fail before resuming the continuation. The
+            // escaped return cell is still uninitialized on this path.
+            const auto dropsBeforePreResumeFailure =
+                privateRefJitAllDropProbeCalls;
+            const auto dispatchesBeforePreResumeFailure =
+                privateRefJitExecutions;
+            const auto resumesBeforePreResumeFailure =
+                privateRefJitCompletedResumes;
+            privateRefJitRepeatedResumeStatus = 0;
+            privateRefJitThrowBeforeResume = true;
+            const auto preResumeFailedStatus = statusProbe(
+                parent.opaque(), const_cast<void*>(handle.opaque()));
+            privateRefJitThrowBeforeResume = false;
+            const auto preResumeRefStatus =
+                luna_runtime_fragment_ref_check_v1(
+                    handle.opaque(), slot->symbolId.value.c_str(),
+                    slot->contractId.value.c_str());
+            if (preResumeFailedStatus !=
+                    LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
+                privateRefJitExecutions !=
+                    dispatchesBeforePreResumeFailure + 1 ||
+                privateRefJitCompletedResumes !=
+                    resumesBeforePreResumeFailure ||
+                privateRefJitAllDropProbeCalls !=
+                    dropsBeforePreResumeFailure +
+                        preResumeDispatchFailureDropCalls ||
+                preResumeRefStatus !=
+                    LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 ||
+                generationLease.expired()) {
+                std::ostringstream details;
+                details << "private Result status body mishandled pre-resume failure"
+                        << " (status=" << preResumeFailedStatus
+                        << ", dispatches=" << privateRefJitExecutions -
+                            dispatchesBeforePreResumeFailure
+                        << ", resumes=" << privateRefJitCompletedResumes -
+                            resumesBeforePreResumeFailure
+                        << ", drops=" << privateRefJitAllDropProbeCalls -
+                            dropsBeforePreResumeFailure
+                        << ", ref=" << preResumeRefStatus
+                        << ", leaseExpired=" << generationLease.expired()
+                        << ')';
+                error = details.str();
+                return false;
+            }
+            before = privateRefJitExecutions;
+            resumesBefore = privateRefJitCompletedResumes;
+        }
         const auto dropsBefore = privateRefJitAllDropProbeCalls;
         privateRefJitRepeatedResumeStatus = 0;
         privateRefJitRepeatedResumeFailureValue = expectedValues.front();
@@ -7534,9 +7588,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             *tryApplyModule, *tryApplyOutlinedResourceReturn,
             privateRefJitError, 1, true, 0, false, false,
             {1}, {}, std::pair<bool, int32_t>{false, 59}, 1,
-            false, false, false, nullptr, 0, true)) {
+            false, false, false, nullptr, 0, false, std::nullopt,
+            false, false, std::nullopt, true, 1, false, 0, true)) {
         std::cerr << privateRefJitError << '\n';
-        return fail("outlined owned Result escaped the status gate");
+        return fail("outlined owned Result failure did not clean its pending return owner");
     }
     const auto dispatchedReturnedDropBefore =
         privateRefJitReturnedDropProbeCalls;

@@ -1797,7 +1797,7 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
 以及 Windows、Linux、macOS 上销毁 loader 与 Runtime 后的固定调用。已有私有探针
 覆盖其中一部分，但不能代替公开 loader 契约。
 
-### 下一步源码 Ref／apply 完成门（更新于 2026-10-19）
+### 下一步源码 Ref／apply 完成门（更新于 2026-10-20）
 
 以下是剩余源码功能的建议实施顺序，不是公开 ABI 决议或稳定版发布批准：
 
@@ -1883,9 +1883,16 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    尚存的 `resource`。JIT 精确验证派生失败 Drop 两者、分派失败只 Drop 剩余资源，
    成功路径则按既有协议提交返回 owner。源码所有权检查现会检查 Slot 参数表达式，
    因而参数求值后的 move 会进入密封 CFG 的清理快照。这仍只是私有证明：状态副本
-   限于一个 Ref Apply、一个 Slot、无操作且仅 Jump 的 outlined block、无 edge cleanup。
-   下一项需证明 outlined callback 已把 owner 移入返回暂存后 Runtime 才报告分派失败时，
-   如何安全清理尚未提交的 owner；公开宿主转移和 v3 失败状态仍保持关闭。
+   限于一个 Ref Apply、一个 Slot、仅 Jump 的 outlined block、无 edge cleanup；唯一例外
+   是一个严格的 owned-Err callback：单个 Return 将 marker-only resource move 进 `Err`，
+   且仅允许匹配的 allocation 与 binding 操作。返回暂存有初始化位，先写值再置位；
+   分派失败只在该位为真时加载并 Drop 暂存值。抛出异常且未 resume 的 handler 证明未写
+   返回值时不会读取未初始化暂存；callback 返回后重复 resume 失败证明未提交 owner
+   恰好 Drop 一次。正常成功路径仍会交接 owner，标量 callback 内创建 owner 的反例仍被拒绝。
+   下一项可在保留私有门槛的前提下，准入一个带分支的 callback：一支返回 owned Err，
+   另一支正常完成；需逐路径证明返回暂存初始化及清理。更广控制流和调用方输出预检未完成前，
+   公开宿主转移与 v3 失败状态继续关闭。Windows 全量构建、78／78 CTest 和
+   ASan／UBSan canonical JIT 测试均通过。
    每条准入的出口都须在 apply 局部清理之后、借用的
    Ref owner Drop 之前，按内到外恰好一次释放有效 context；其余路径继续拒绝。
    Windows LLVM 20.1.8 的 RuntimeDyld COFF 重定位故障现也在 LLVM 22 ASan

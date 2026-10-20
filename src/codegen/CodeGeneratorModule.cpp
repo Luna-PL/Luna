@@ -80,10 +80,12 @@ bool matchesPrivateRefContextEffect(
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 // A failed dispatch may be reported after its continuation has run. Admit an
-// owned Result status clone only when the outlined continuation cannot write
-// an owner into the inherited return cell or leave a live local behind.
+// owned Result status clone only for inert outlines or one moved Err return;
+// the latter is guarded by a runtime initialized bit before failure cleanup.
 struct PrivateOwnedResultStatusPlan {
     std::vector<std::vector<moon::CleanupId>> failureCleanupsByBlock;
+    std::vector<bool> cleanupPendingReturnByBlock;
+    moon::TypeRef pendingReturnType;
 };
 
 std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
@@ -98,8 +100,26 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
     const auto* result = program.findType(function.returnType);
     if (!result || result->typeArgumentIds.size() != 2)
         return std::nullopt;
+    const auto* okPayload = program.findType(result->typeArgumentIds[0]);
+    const auto* errorPayload = program.findType(result->typeArgumentIds[1]);
+    const auto* markerType = errorPayload && errorPayload->fields.size() == 1
+        ? program.findType(errorPayload->fields.front().type) : nullptr;
+    const auto* errorDrop = errorPayload && !errorPayload->dropGlue.empty()
+        ? program.findDeclaration(errorPayload->dropGlue) : nullptr;
+    if (result->kind != TypeKind::Result || !okPayload ||
+        okPayload->kind != TypeKind::I32 || !errorPayload ||
+        errorPayload->kind != TypeKind::Struct ||
+        errorPayload->fields.size() != 1 ||
+        errorPayload->fields.front().name != "marker" || !markerType ||
+        markerType->kind != TypeKind::I32 ||
+        !errorPayload->sysmeta.resource.needsDrop ||
+        !errorPayload->sysmeta.resource.cleanupRequired ||
+        !errorDrop || errorDrop->kind != moon::DeclarationKind::Function)
+        return std::nullopt;
     PrivateOwnedResultStatusPlan plan;
     plan.failureCleanupsByBlock.resize(graph->blocks.size());
+    plan.cleanupPendingReturnByBlock.resize(graph->blocks.size(), false);
+    plan.pendingReturnType = function.returnType;
     const auto matchFailureCleanups = [&](moon::BlockId block) {
         const auto* source = graph->findBlock(block);
         const auto* active = verifier.activeCleanupsBeforeEdge(block);
@@ -141,6 +161,37 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
         return true;
     };
     size_t slotCount = 0;
+    size_t outlinedReturnCount = 0;
+    moon::BlockId slotBlock;
+    const auto matchesReturnedOwnerMaterialization =
+        [&](const moon::BasicBlock& block,
+            const moon::IdentifierExpr& source) {
+        if (block.operations.size() != 2) return false;
+        const auto* allocation = dynamic_cast<const moon::AllocateStmt*>(
+            block.operations[0].get());
+        const auto* binding = dynamic_cast<const moon::LetStmt*>(
+            block.operations[1].get());
+        const auto* initialized = binding
+            ? dynamic_cast<const moon::InitAllocationExpr*>(
+                  binding->initializer.get())
+            : nullptr;
+        const auto* marker = initialized &&
+                initialized->elements.size() == 1 &&
+                initialized->elements.front().index == 0
+            ? dynamic_cast<const moon::IntLiteralExpr*>(
+                  initialized->elements.front().value.get())
+            : nullptr;
+        return allocation && binding && initialized && marker &&
+            allocation->local == initialized->allocation &&
+            allocation->allocatedType == errorPayload->id &&
+            allocation->storage == HeapStorageKind::Unique &&
+            binding->local == source.local &&
+            binding->type == errorPayload->id &&
+            initialized->type == errorPayload->id &&
+            initialized->allocatedType == errorPayload->id &&
+            initialized->storage == HeapStorageKind::Unique &&
+            marker->type == markerType->id;
+    };
     for (const auto& block : graph->blocks) {
         bool outlined = false;
         for (auto regionId = block.region; !regionId.empty();) {
@@ -152,17 +203,45 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
             }
             regionId = region->parent;
         }
-        if (outlined && (!block.operations.empty() ||
-                         block.terminator.kind != moon::TerminatorKind::Jump ||
-                         !block.terminator.primary.cleanups.empty()))
-            return std::nullopt;
+        if (outlined) {
+            if (block.terminator.kind == moon::TerminatorKind::Jump) {
+                if (!block.operations.empty() ||
+                    !block.terminator.primary.cleanups.empty())
+                    return std::nullopt;
+            } else if (block.terminator.kind ==
+                       moon::TerminatorKind::Return) {
+                const auto* returned =
+                    dynamic_cast<const moon::ResultConstructExpr*>(
+                        block.terminator.operand.get());
+                const auto* moved = returned
+                    ? dynamic_cast<const moon::MoveExpr*>(
+                          returned->payload.get())
+                    : nullptr;
+                const auto* source = moved
+                    ? dynamic_cast<const moon::IdentifierExpr*>(
+                          moved->operand.get())
+                    : nullptr;
+                if (!block.terminator.exitCleanups.empty() || !returned ||
+                    returned->isOk || !moved || !source ||
+                    returned->payload->type != errorPayload->id ||
+                    block.terminator.operand->type != function.returnType ||
+                    !matchesReturnedOwnerMaterialization(block, *source) ||
+                    ++outlinedReturnCount != 1)
+                    return std::nullopt;
+            } else {
+                return std::nullopt;
+            }
+        }
         if (block.terminator.kind == moon::TerminatorKind::RuntimeSlot) {
             ++slotCount;
+            slotBlock = block.id;
             if (outlined || !matchFailureCleanups(block.id))
                 return std::nullopt;
         }
     }
-    if (slotCount != 1) return std::nullopt;
+    if (slotCount != 1 || outlinedReturnCount > 1) return std::nullopt;
+    if (outlinedReturnCount == 1)
+        plan.cleanupPendingReturnByBlock[slotBlock.value] = true;
     size_t derivationCount = 0;
     for (const auto& edge : flow->edges)
         if (!edge.enters.empty()) {
@@ -2255,8 +2334,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 privateScalarResultStatusCandidate(program, function);
             if (function.params.size() == 1 &&
                 (scalarStatusCandidate || ownedStatusPlan)) {
-                // The bounded owned Result clone releases its proven local
-                // owners when derivation or dispatch reports failure.
+                // The bounded owned Result clone releases proven local
+                // owners and an initialized outlined return value on failure.
                 // A trailing cell separates failure from the Result tag.
                 std::vector<llvm::Type*> statusParameters(
                     body->getFunctionType()->params().begin(),
@@ -2273,9 +2352,16 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 proof.mPrivateRefResultFailureCleanupsByBlock = ownedStatusPlan
                     ? ownedStatusPlan->failureCleanupsByBlock
                     : std::vector<std::vector<moon::CleanupId>>{};
+                proof.mPrivateRefResultPendingReturnByBlock = ownedStatusPlan
+                    ? ownedStatusPlan->cleanupPendingReturnByBlock
+                    : std::vector<bool>{};
+                proof.mPrivateRefResultPendingReturnType = ownedStatusPlan
+                    ? ownedStatusPlan->pendingReturnType : moon::TypeRef{};
                 proof.generateFunctionBody(&function);
                 proof.mPrivateRefResultStatusBody = false;
                 proof.mPrivateRefResultFailureCleanupsByBlock.clear();
+                proof.mPrivateRefResultPendingReturnByBlock.clear();
+                proof.mPrivateRefResultPendingReturnType = {};
                 proof.mFunctions[function.generatedSymbolName] = body;
                 if (!proof.mErrors.empty() || statusBody->empty() ||
                     statusBody->arg_size() != 3) {

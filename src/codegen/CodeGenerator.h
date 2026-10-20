@@ -427,6 +427,10 @@ private:
     // Verified local owners to release on each bounded Result failure exit.
     std::vector<std::vector<moon::CleanupId>>
         mPrivateRefResultFailureCleanupsByBlock;
+    // Some outlined Returns write an owned Result before Runtime reports a
+    // dispatch failure. Clean that value only when its return cell was set.
+    std::vector<bool> mPrivateRefResultPendingReturnByBlock;
+    moon::TypeRef mPrivateRefResultPendingReturnType;
     bool mCurrentFunctionIsKernel = false;
     std::unordered_map<std::string, llvm::Function*> mFunctions;
     std::unordered_map<std::string, llvm::Function*> mDropCallbacks;
