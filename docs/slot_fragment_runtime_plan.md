@@ -2661,10 +2661,15 @@ has no operations or edge cleanups, and its paths resolve separately to the
 single matching Return and normal completion. JIT probes exercise both values:
 the Err arm's pending owner is Dropped once after dispatch failure, while the
 completion arm leaves the unwritten cell untouched. Next, consider a callback
-branch with a narrowly proven local cleanup on its completing arm.
-Public transfer and v3 failure-status gates remain closed pending broader
-control-flow and untouched caller-output proofs. The Windows full build and
-78/78 CTest suite pass, as does the ASan/UBSan canonical JIT test.
+branch with one narrowly proven local cleanup on its completing arm. That arm
+may construct exactly one marker-only owner and leave through one Drop cleanup
+edge whose active set contains only that owner. JIT checks marker `61` on each
+completion, including injected dispatch failure and recovery; the Err arm's
+marker `59` return remains independent. Next, test two completion-arm owners
+and prove their reverse-construction cleanup order. Public transfer and v3
+failure-status gates remain closed pending broader control-flow and untouched
+caller-output proofs. The Windows full build and 78/78 CTest suite pass, as
+does the ASan/UBSan canonical JIT test.
    The MoonIR ownership verifier now exposes read-only active cleanup rows at
    verified Jump and RuntimeSlot boundaries, after local operations and Slot
    argument evaluation. The dispatched owned-Err fixture has a live `input`

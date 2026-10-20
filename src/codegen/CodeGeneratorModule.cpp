@@ -181,9 +181,11 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
     size_t slotCount = 0;
     size_t outlinedReturnCount = 0;
     size_t outlinedBranchCount = 0;
+    size_t outlinedCompletionCleanupCount = 0;
     moon::BlockId slotBlock;
     const moon::BasicBlock* outlinedBranch = nullptr;
     const moon::BasicBlock* outlinedReturn = nullptr;
+    std::unordered_set<uint32_t> outlinedCompletionCleanupBlocks;
     const auto matchesReturnedOwnerMaterialization =
         [&](const moon::BasicBlock& block,
             const moon::IdentifierExpr& source) {
@@ -213,6 +215,62 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
             initialized->storage == HeapStorageKind::Unique &&
             marker->type == markerType->id;
     };
+    const auto matchesOutlinedCompletionCleanup =
+        [&](const moon::BasicBlock& block) {
+        if (!hasSelector || block.operations.size() != 2 ||
+            block.terminator.primary.cleanups.size() != 1 ||
+            !block.terminator.secondary.cleanups.empty() ||
+            !block.terminator.exitCleanups.empty())
+            return false;
+        const auto* allocation = dynamic_cast<const moon::AllocateStmt*>(
+            block.operations[0].get());
+        const auto* binding = dynamic_cast<const moon::LetStmt*>(
+            block.operations[1].get());
+        const auto* initialized = binding
+            ? dynamic_cast<const moon::InitAllocationExpr*>(
+                  binding->initializer.get())
+            : nullptr;
+        const auto* marker = initialized &&
+                initialized->elements.size() == 1 &&
+                initialized->elements.front().index == 0
+            ? dynamic_cast<const moon::IntLiteralExpr*>(
+                  initialized->elements.front().value.get())
+            : nullptr;
+        const auto* allocationLocal = allocation
+            ? graph->findLocal(allocation->local) : nullptr;
+        const auto* ownerLocal = binding
+            ? graph->findLocal(binding->local) : nullptr;
+        const auto* cleanup = graph->findCleanup(
+            block.terminator.primary.cleanups.front());
+        const auto* active = verifier.activeCleanupsBeforeEdge(block.id);
+        if (!allocation || !binding || !initialized || !marker ||
+            !allocationLocal || !ownerLocal || !cleanup || !active ||
+            allocationLocal->kind != moon::LocalKind::Allocation ||
+            ownerLocal->kind != moon::LocalKind::Binding ||
+            allocationLocal->scope != ownerLocal->scope ||
+            block.scope != ownerLocal->scope ||
+            allocation->local == binding->local ||
+            allocation->allocatedType != errorPayload->id ||
+            allocation->storage != HeapStorageKind::Unique ||
+            initialized->allocation != allocation->local ||
+            initialized->allocatedType != errorPayload->id ||
+            initialized->storage != HeapStorageKind::Unique ||
+            initialized->type != errorPayload->id ||
+            binding->type != errorPayload->id ||
+            marker->type != markerType->id ||
+            cleanup->scope != ownerLocal->scope ||
+            cleanup->place.root != binding->local ||
+            !cleanup->place.projections.empty() ||
+            cleanup->type != errorPayload->id ||
+            cleanup->kind != moon::CleanupKind::Value ||
+            cleanup->action != luna::ownership::CleanupAction::Drop ||
+            cleanup->guard || active->size() != 1 ||
+            active->front() != cleanup->id ||
+            ++outlinedCompletionCleanupCount != 1)
+            return false;
+        outlinedCompletionCleanupBlocks.insert(block.id.value);
+        return true;
+    };
     for (const auto& block : graph->blocks) {
         bool outlined = false;
         for (auto regionId = block.region; !regionId.empty();) {
@@ -226,8 +284,12 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
         }
         if (outlined) {
             if (block.terminator.kind == moon::TerminatorKind::Jump) {
-                if (!block.operations.empty() ||
-                    !block.terminator.primary.cleanups.empty())
+                const bool inertJump = block.operations.empty() &&
+                    block.terminator.primary.cleanups.empty() &&
+                    block.terminator.secondary.cleanups.empty() &&
+                    block.terminator.exitCleanups.empty();
+                if (!inertJump &&
+                    !matchesOutlinedCompletionCleanup(block))
                     return std::nullopt;
             } else if (block.terminator.kind ==
                        moon::TerminatorKind::Branch) {
@@ -286,9 +348,14 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
         return std::nullopt;
     if (outlinedBranch) {
         enum class BranchOutcome : uint8_t { ReturnsOwner, Completes };
+        struct BranchPath {
+            BranchOutcome outcome;
+            bool hasCompletionCleanup = false;
+        };
         const auto classifyBranchOutcome = [&](moon::BlockId start)
-            -> std::optional<BranchOutcome> {
+            -> std::optional<BranchPath> {
             std::unordered_set<uint32_t> visited;
+            bool hasCompletionCleanup = false;
             auto current = start;
             for (;;) {
                 const auto* block = graph->findBlock(current);
@@ -303,14 +370,26 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
                     }
                     regionId = region->parent;
                 }
-                if (!isOutlined) return BranchOutcome::Completes;
+                if (!isOutlined)
+                    return BranchPath{BranchOutcome::Completes,
+                                      hasCompletionCleanup};
                 if (!visited.insert(current.value).second)
                     return std::nullopt;
-                if (block == outlinedReturn)
-                    return BranchOutcome::ReturnsOwner;
+                if (block == outlinedReturn) {
+                    if (hasCompletionCleanup) return std::nullopt;
+                    return BranchPath{BranchOutcome::ReturnsOwner, false};
+                }
+                if (outlinedCompletionCleanupBlocks.count(block->id.value)) {
+                    if (hasCompletionCleanup) return std::nullopt;
+                    hasCompletionCleanup = true;
+                }
                 if (block->terminator.kind != moon::TerminatorKind::Jump ||
-                    !block->operations.empty() ||
-                    !block->terminator.primary.cleanups.empty())
+                    (!block->operations.empty() &&
+                     !outlinedCompletionCleanupBlocks.count(
+                         block->id.value)) ||
+                    (!block->terminator.primary.cleanups.empty() &&
+                     !outlinedCompletionCleanupBlocks.count(
+                         block->id.value)))
                     return std::nullopt;
                 current = block->terminator.primary.target;
             }
@@ -319,7 +398,16 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
             outlinedBranch->terminator.primary.target);
         const auto secondary = classifyBranchOutcome(
             outlinedBranch->terminator.secondary.target);
-        if (!primary || !secondary || *primary == *secondary)
+        if (!primary || !secondary ||
+            primary->outcome == secondary->outcome)
+            return std::nullopt;
+        const auto& returning = primary->outcome ==
+                BranchOutcome::ReturnsOwner ? *primary : *secondary;
+        const auto& completing = primary->outcome ==
+                BranchOutcome::Completes ? *primary : *secondary;
+        if (returning.hasCompletionCleanup ||
+            (outlinedCompletionCleanupCount == 1) !=
+                completing.hasCompletionCleanup)
             return std::nullopt;
     }
     if (outlinedReturnCount == 1)

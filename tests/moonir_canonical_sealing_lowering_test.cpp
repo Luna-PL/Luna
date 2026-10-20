@@ -37,11 +37,13 @@ static unsigned privateRefJitReturnedDropProbeCalls = 0;
 static unsigned privateRefJitReturnedOkDropProbeCalls = 0;
 static unsigned privateRefJitReturnedPairDropProbeCalls = 0;
 static unsigned privateRefJitAllDropProbeCalls = 0;
+static unsigned privateRefJitBranchLocalDropProbeCalls = 0;
 static std::vector<int32_t> privateRefJitConversionDropOrder;
 static std::vector<int32_t> privateRefJitFromResourceDropOrder;
 static std::vector<int32_t> privateRefJitFromBranchMarkers;
 static std::vector<int32_t> privateRefJitNestedDropOrder;
 static std::vector<int32_t> privateRefJitRootDropOrder;
+static std::vector<int32_t> privateRefJitBranchLocalDropOrder;
 static bool privateRefJitDropProbeValid = true;
 
 extern "C" void luna_private_ref_drop_probe(int32_t marker) {
@@ -61,6 +63,9 @@ extern "C" void luna_private_ref_drop_probe(int32_t marker) {
         ++privateRefJitReturnedDropProbeCalls;
         privateRefJitFromResourceDropOrder.push_back(marker);
         privateRefJitRootDropOrder.push_back(marker);
+    } else if (marker == 61) {
+        ++privateRefJitBranchLocalDropProbeCalls;
+        privateRefJitBranchLocalDropOrder.push_back(marker);
     }
     else if (marker == 67) {
         ++privateRefJitReturnedOkDropProbeCalls;
@@ -4718,6 +4723,21 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "  }\n"
         "  return Ok(0);\n"
         "}\n"
+        "runtime fn try_apply_branched_outlined_resource_cleanup("
+            "selected: RuntimeFragmentRef<checkpoint>, return_owner: bool) "
+            "-> Result<i32, ReturnedResource> {\n"
+        "  apply selected {\n"
+        "    checkpoint(1) {\n"
+        "      if return_owner {\n"
+        "        let resource = new ReturnedResource(59);\n"
+        "        return Err::<i32, ReturnedResource>(move resource);\n"
+        "      } else {\n"
+        "        let completion = new ReturnedResource(61);\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
         "runtime fn try_apply_from_resource_return("
             "selected: RuntimeFragmentRef<checkpoint>) "
             "-> Result<i32, ReturnedResource> {\n"
@@ -4907,6 +4927,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* tryApplyScalarOutlinedOwner = nullptr;
     moon::FunctionDecl* tryApplyOutlinedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyBranchedOutlinedResourceReturn = nullptr;
+    moon::FunctionDecl* tryApplyBranchedOutlinedResourceCleanup = nullptr;
     moon::FunctionDecl* tryApplyFromResourceReturn = nullptr;
     moon::FunctionDecl* tryApplySplitOwnedFrom = nullptr;
     moon::FunctionDecl* tryApplySplitOwnedFromElse = nullptr;
@@ -4972,6 +4993,9 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             if (function->name ==
                     "try_apply_branched_outlined_resource_return")
                 tryApplyBranchedOutlinedResourceReturn = function;
+            if (function->name ==
+                    "try_apply_branched_outlined_resource_cleanup")
+                tryApplyBranchedOutlinedResourceCleanup = function;
             if (function->name == "try_apply_from_resource_return")
                 tryApplyFromResourceReturn = function;
             if (function->name == "try_apply_split_owned_from")
@@ -5010,6 +5034,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !tryApplyScalarPreowned || !tryApplyScalarOutlinedOwner ||
         !tryApplyOutlinedResourceReturn ||
         !tryApplyBranchedOutlinedResourceReturn ||
+        !tryApplyBranchedOutlinedResourceCleanup ||
         !tryApplyFromResourceReturn ||
         !tryApplySplitOwnedFrom || !tryApplySplitOwnedFromElse ||
         !tryApplyOkResourceReturn ||
@@ -7673,6 +7698,77 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         std::cerr << privateRefJitError << '\n';
         return fail("normal callback branch read or cleaned an unwritten return cell");
     }
+    if (!tryApplyBranchedOutlinedResourceCleanup->controlFlow)
+        return fail("branched callback cleanup fixture has no sealed CFG");
+    moon::Verifier branchedCleanupWitness;
+    const auto& branchedCleanupGraph =
+        *tryApplyBranchedOutlinedResourceCleanup->controlFlow;
+    if (!branchedCleanupWitness.verify(branchedCleanupGraph, *tryApplyModule))
+        return fail("branched callback cleanup fixture lost ownership proof");
+    size_t branchedCleanupEdges = 0;
+    for (const auto& block : branchedCleanupGraph.blocks) {
+        bool outlined = false;
+        for (auto regionId = block.region; !regionId.empty();) {
+            const auto* region = branchedCleanupGraph.findRegion(regionId);
+            if (!region) return fail("branched cleanup lost its region");
+            if (region->kind == moon::RegionKind::Continuation) {
+                outlined = true;
+                break;
+            }
+            regionId = region->parent;
+        }
+        if (!outlined || block.terminator.kind != moon::TerminatorKind::Jump ||
+            block.terminator.primary.cleanups.empty())
+            continue;
+        if (block.terminator.primary.cleanups.size() != 1)
+            return fail("branched callback cleanup edge has multiple owners");
+        const auto* cleanup = branchedCleanupGraph.findCleanup(
+            block.terminator.primary.cleanups.front());
+        const auto* active = branchedCleanupWitness.activeCleanupsBeforeEdge(
+            block.id);
+        if (!cleanup || !active || active->size() != 1 ||
+            active->front() != cleanup->id ||
+            cleanup->kind != moon::CleanupKind::Value ||
+            cleanup->action != luna::ownership::CleanupAction::Drop ||
+            cleanup->place.root.empty() ||
+            !cleanup->place.projections.empty())
+            return fail("branched callback cleanup edge lost its local Drop");
+        ++branchedCleanupEdges;
+    }
+    if (branchedCleanupEdges != 1)
+        return fail("branched callback did not retain one local cleanup edge");
+    privateRefJitBranchLocalDropOrder.clear();
+    const auto branchedLocalDropCallsBefore =
+        privateRefJitBranchLocalDropProbeCalls;
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyBranchedOutlinedResourceCleanup,
+            privateRefJitError, 1, false, 1, false, false,
+            {1}, {}, std::pair<bool, int32_t>{true, 0}, std::nullopt,
+            false, false, false, nullptr, 0, false, false,
+            false, false, std::nullopt, true, 2, false, 0, true, 0)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("normal callback branch failed to clean its local owner");
+    }
+    if (privateRefJitBranchLocalDropProbeCalls -
+            branchedLocalDropCallsBefore != 4 ||
+        privateRefJitBranchLocalDropOrder !=
+            std::vector<int32_t>{61, 61, 61, 61} ||
+        !privateRefJitDropProbeValid)
+        return fail("callback local owner was not dropped once on each completion");
+    const auto localDropsBeforeErrBranch =
+        privateRefJitBranchLocalDropProbeCalls;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyBranchedOutlinedResourceCleanup,
+            privateRefJitError, 1, true, 0, false, false,
+            {1}, {}, std::pair<bool, int32_t>{false, 59}, std::nullopt,
+            false, false, false, nullptr, 0, false, true,
+            false, false, std::nullopt, true, 1, false, 0, true, 0)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("owned Err arm was affected by completion-branch cleanup");
+    }
+    if (privateRefJitBranchLocalDropProbeCalls != localDropsBeforeErrBranch)
+        return fail("returning callback arm ran the completing arm's Drop");
     const auto dispatchedReturnedDropBefore =
         privateRefJitReturnedDropProbeCalls;
     privateRefJitDropProbeValid = true;
