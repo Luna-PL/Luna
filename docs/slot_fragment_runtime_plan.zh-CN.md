@@ -1889,8 +1889,11 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    分派失败只在该位为真时加载并 Drop 暂存值。抛出异常且未 resume 的 handler 证明未写
    返回值时不会读取未初始化暂存；callback 返回后重复 resume 失败证明未提交 owner
    恰好 Drop 一次。正常成功路径仍会交接 owner，标量 callback 内创建 owner 的反例仍被拒绝。
-   下一项可在保留私有门槛的前提下，准入一个带分支的 callback：一支返回 owned Err，
-   另一支正常完成；需逐路径证明返回暂存初始化及清理。更广控制流和调用方输出预检未完成前，
+   状态副本现也准入一个 bool 选择的 callback 分支：恰好一支返回 owned Err，另一支完成而不写
+   返回暂存。条件必须是复制的 bool 参数，分支块无操作且没有 edge cleanup，两条路径分别到达
+   唯一匹配的 Return 或正常完成。JIT 分别运行两个值，证明 Err 支的暂存 owner 在分派失败后恰好
+   Drop 一次，而完成支不会读取未写入的暂存。下一步考虑完成支含有局部 cleanup 的 callback 分支，
+   并为其建立窄范围逐路径证明。更广控制流和调用方输出预检未完成前，
    公开宿主转移与 v3 失败状态继续关闭。Windows 全量构建、78／78 CTest 和
    ASan／UBSan canonical JIT 测试均通过。
    每条准入的出口都须在 apply 局部清理之后、借用的

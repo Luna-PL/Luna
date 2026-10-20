@@ -2654,8 +2654,14 @@ loads and Drops it only when set. A pre-resume throwing handler proves the
 unwritten cell is ignored; repeated resume after the callback Return proves
 the pending owner is Dropped exactly once. The ordinary success path still
 transfers the owner, and the scalar callback-owner counterexample remains
-rejected. Next, consider a branched callback that can either return an owned
-Err or complete without writing the return cell, with per-arm cleanup proof.
+rejected. The status clone now also admits one bool-selected callback branch:
+exactly one arm returns the owned Err and the other completes without writing
+the return cell. The selector must be the copied bool parameter, the branch
+has no operations or edge cleanups, and its paths resolve separately to the
+single matching Return and normal completion. JIT probes exercise both values:
+the Err arm's pending owner is Dropped once after dispatch failure, while the
+completion arm leaves the unwritten cell untouched. Next, consider a callback
+branch with a narrowly proven local cleanup on its completing arm.
 Public transfer and v3 failure-status gates remain closed pending broader
 control-flow and untouched caller-output proofs. The Windows full build and
 78/78 CTest suite pass, as does the ASan/UBSan canonical JIT test.

@@ -378,6 +378,7 @@ bool exercisePrivateRefApplyJit(
         : nullptr;
     if (transferredDropCalls && !dropAddress) return false;
     using StatusProbe = int32_t (*)(const void*, void*);
+    using StatusProbeSelector = int32_t (*)(const void*, void*, bool);
     const void* statusProbeAddress =
         exerciseStatusDispatchFailure
             ? jit->lookup(
@@ -386,6 +387,13 @@ bool exercisePrivateRefApplyJit(
     if (exerciseStatusDispatchFailure && !statusProbeAddress) return false;
     const auto statusProbe = reinterpret_cast<StatusProbe>(
         const_cast<void*>(statusProbeAddress));
+    const auto statusProbeSelector = reinterpret_cast<StatusProbeSelector>(
+        const_cast<void*>(statusProbeAddress));
+    const auto invokeStatusProbe = [&](const void* context, void* reference) {
+        return branchSelector
+            ? statusProbeSelector(context, reference, *branchSelector)
+            : statusProbe(context, reference);
+    };
     std::unique_ptr<LunaPrivateRefResultLoadedEntry> loadedResult;
     if (exerciseLoadedResult || expectNoStatusBody) {
         if (jit->lookup(
@@ -416,7 +424,7 @@ bool exercisePrivateRefApplyJit(
     if (exerciseStatusDispatchFailure) {
         const auto dispatchesBeforeProbe = privateRefJitExecutions;
         const auto dropsBeforeProbe = privateRefJitAllDropProbeCalls;
-        if (statusProbe(nullptr, nullptr) !=
+        if (invokeStatusProbe(nullptr, nullptr) !=
                 LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
             privateRefJitExecutions != dispatchesBeforeProbe ||
             privateRefJitAllDropProbeCalls !=
@@ -642,6 +650,7 @@ bool exercisePrivateRefApplyJit(
     using EntryTwo = int32_t (*)(const void*, void*, void*);
     using EntrySelector = int32_t (*)(const void*, void*, bool);
     using EntryResultOne = uint64_t (*)(const void*, void*);
+    using EntryResultSelector = uint64_t (*)(const void*, void*, bool);
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST == 0);
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_CONTEXT_V1_TEST == 1);
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST == 2);
@@ -677,6 +686,8 @@ bool exercisePrivateRefApplyJit(
     const auto entrySelector = reinterpret_cast<EntrySelector>(
         const_cast<void*>(address));
     const auto entryResultOne = reinterpret_cast<EntryResultOne>(
+        const_cast<void*>(address));
+    const auto entryResultSelector = reinterpret_cast<EntryResultSelector>(
         const_cast<void*>(address));
     const auto entryTransfer = reinterpret_cast<EntryTransfer>(
         const_cast<void*>(transferAddress));
@@ -1151,8 +1162,11 @@ bool exercisePrivateRefApplyJit(
                 error = "private Result JIT fixture requires one borrowed Ref";
                 return false;
             }
-            const uint64_t packed = entryResultOne(
-                parent.opaque(), const_cast<void*>(handle.opaque()));
+            const uint64_t packed = branchSelector
+                ? entryResultSelector(parent.opaque(),
+                    const_cast<void*>(handle.opaque()), *branchSelector)
+                : entryResultOne(parent.opaque(),
+                    const_cast<void*>(handle.opaque()));
             const bool isOk = ((packed >> 32) & 1u) != 0;
             const int32_t payload = static_cast<int32_t>(
                 static_cast<uint32_t>(packed));
@@ -1216,7 +1230,7 @@ bool exercisePrivateRefApplyJit(
                 privateRefJitCompletedResumes;
             privateRefJitRepeatedResumeStatus = 0;
             privateRefJitThrowBeforeResume = true;
-            const auto preResumeFailedStatus = statusProbe(
+            const auto preResumeFailedStatus = invokeStatusProbe(
                 parent.opaque(), const_cast<void*>(handle.opaque()));
             privateRefJitThrowBeforeResume = false;
             const auto preResumeRefStatus =
@@ -1257,12 +1271,13 @@ bool exercisePrivateRefApplyJit(
         privateRefJitRepeatedResumeStatus = 0;
         privateRefJitRepeatedResumeFailureValue = expectedValues.front();
         privateRefJitInjectRepeatedResumeFailure = true;
-        const auto failedStatus = statusProbe(
+        const auto failedStatus = invokeStatusProbe(
             parent.opaque(), const_cast<void*>(handle.opaque()));
         privateRefJitInjectRepeatedResumeFailure = false;
         privateRefJitRepeatedResumeFailureValue = 0;
         const bool recoveredStatus = transferredDropCalls ||
-            statusProbe(parent.opaque(), const_cast<void*>(handle.opaque())) == 0;
+            invokeStatusProbe(parent.opaque(),
+                const_cast<void*>(handle.opaque())) == 0;
         if (failedStatus !=
                 LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
             !recoveredStatus ||
@@ -4690,6 +4705,19 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "  }\n"
         "  return Ok(0);\n"
         "}\n"
+        "runtime fn try_apply_branched_outlined_resource_return("
+            "selected: RuntimeFragmentRef<checkpoint>, return_owner: bool) "
+            "-> Result<i32, ReturnedResource> {\n"
+        "  apply selected {\n"
+        "    checkpoint(1) {\n"
+        "      if return_owner {\n"
+        "        let resource = new ReturnedResource(59);\n"
+        "        return Err::<i32, ReturnedResource>(move resource);\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
         "runtime fn try_apply_from_resource_return("
             "selected: RuntimeFragmentRef<checkpoint>) "
             "-> Result<i32, ReturnedResource> {\n"
@@ -4878,6 +4906,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* tryApplyScalarPreowned = nullptr;
     moon::FunctionDecl* tryApplyScalarOutlinedOwner = nullptr;
     moon::FunctionDecl* tryApplyOutlinedResourceReturn = nullptr;
+    moon::FunctionDecl* tryApplyBranchedOutlinedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyFromResourceReturn = nullptr;
     moon::FunctionDecl* tryApplySplitOwnedFrom = nullptr;
     moon::FunctionDecl* tryApplySplitOwnedFromElse = nullptr;
@@ -4940,6 +4969,9 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 tryApplyScalarOutlinedOwner = function;
             if (function->name == "try_apply_outlined_resource_return")
                 tryApplyOutlinedResourceReturn = function;
+            if (function->name ==
+                    "try_apply_branched_outlined_resource_return")
+                tryApplyBranchedOutlinedResourceReturn = function;
             if (function->name == "try_apply_from_resource_return")
                 tryApplyFromResourceReturn = function;
             if (function->name == "try_apply_split_owned_from")
@@ -4977,6 +5009,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !tryApplyPathVaryingFailureCleanup ||
         !tryApplyScalarPreowned || !tryApplyScalarOutlinedOwner ||
         !tryApplyOutlinedResourceReturn ||
+        !tryApplyBranchedOutlinedResourceReturn ||
         !tryApplyFromResourceReturn ||
         !tryApplySplitOwnedFrom || !tryApplySplitOwnedFromElse ||
         !tryApplyOkResourceReturn ||
@@ -7592,6 +7625,53 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             false, false, std::nullopt, true, 1, false, 0, true)) {
         std::cerr << privateRefJitError << '\n';
         return fail("outlined owned Result failure did not clean its pending return owner");
+    }
+    if (!tryApplyBranchedOutlinedResourceReturn->controlFlow)
+        return fail("branched outlined owned Result has no sealed CFG");
+    moon::Verifier branchedOutlinedOwnedWitness;
+    const auto& branchedOutlinedOwnedGraph =
+        *tryApplyBranchedOutlinedResourceReturn->controlFlow;
+    if (!branchedOutlinedOwnedWitness.verify(
+            branchedOutlinedOwnedGraph, *tryApplyModule))
+        return fail("branched outlined owned Result lost ownership dataflow");
+    size_t branchedCallbackBranches = 0;
+    size_t branchedCallbackReturns = 0;
+    for (const auto& block : branchedOutlinedOwnedGraph.blocks) {
+        bool outlined = false;
+        for (auto regionId = block.region; !regionId.empty();) {
+            const auto* region = branchedOutlinedOwnedGraph.findRegion(regionId);
+            if (!region) return fail("branched callback lost its region");
+            if (region->kind == moon::RegionKind::Continuation) {
+                outlined = true;
+                break;
+            }
+            regionId = region->parent;
+        }
+        if (!outlined) continue;
+        branchedCallbackBranches += block.terminator.kind ==
+            moon::TerminatorKind::Branch;
+        branchedCallbackReturns += block.terminator.kind ==
+            moon::TerminatorKind::Return;
+    }
+    if (branchedCallbackBranches != 1 || branchedCallbackReturns != 1)
+        return fail("branched callback did not retain one return/completion fork");
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyBranchedOutlinedResourceReturn,
+            privateRefJitError, 1, true, 0, false, false,
+            {1}, {}, std::pair<bool, int32_t>{false, 59}, std::nullopt,
+            false, false, false, nullptr, 0, false, true,
+            false, false, std::nullopt, true, 1, false, 0, true, 0)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("owned Err callback branch lost pending-return cleanup");
+    }
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyBranchedOutlinedResourceReturn,
+            privateRefJitError, 1, false, 1, false, false,
+            {1}, {}, std::pair<bool, int32_t>{true, 0}, std::nullopt,
+            false, false, false, nullptr, 0, false, false,
+            false, false, std::nullopt, true, 0, false, 0, true, 0)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("normal callback branch read or cleaned an unwritten return cell");
     }
     const auto dispatchedReturnedDropBefore =
         privateRefJitReturnedDropProbeCalls;

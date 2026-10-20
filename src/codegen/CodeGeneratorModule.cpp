@@ -80,8 +80,9 @@ bool matchesPrivateRefContextEffect(
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 // A failed dispatch may be reported after its continuation has run. Admit an
-// owned Result status clone only for inert outlines or one moved Err return;
-// the latter is guarded by a runtime initialized bit before failure cleanup.
+// owned Result status clone only for inert outlines, one moved Err return, or
+// one bool-selected return/completion branch. Returned owners are guarded by a
+// runtime initialized bit before failure cleanup.
 struct PrivateOwnedResultStatusPlan {
     std::vector<std::vector<moon::CleanupId>> failureCleanupsByBlock;
     std::vector<bool> cleanupPendingReturnByBlock;
@@ -91,7 +92,24 @@ struct PrivateOwnedResultStatusPlan {
 std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
     const moon::Module& program, const FunctionDecl& function) {
     const auto* graph = function.controlFlow.get();
-    if (!graph || graph->runtimeRefApplies.size() != 1) return std::nullopt;
+    const bool hasSelector = function.params.size() == 2;
+    if (!graph || graph->runtimeRefApplies.size() != 1 ||
+        (function.params.size() != 1 && !hasSelector))
+        return std::nullopt;
+    const auto* referenceType = program.findType(
+        function.params.front().type);
+    if (!referenceType ||
+        referenceType->kind != TypeKind::RuntimeFragmentRef ||
+        function.params.front().relation !=
+            luna::ownership::Relation::SharedBorrow ||
+        (hasSelector && [&] {
+            const auto& selector = function.params.back();
+            const auto* type = program.findType(selector.type);
+            return !type || type->kind != TypeKind::Bool ||
+                selector.relation != luna::ownership::Relation::Owned ||
+                selector.usage != luna::ownership::Usage::Copy;
+        }()))
+        return std::nullopt;
     moon::Verifier verifier;
     if (!verifier.verify(*graph, program)) return std::nullopt;
     std::string flowError;
@@ -162,7 +180,10 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
     };
     size_t slotCount = 0;
     size_t outlinedReturnCount = 0;
+    size_t outlinedBranchCount = 0;
     moon::BlockId slotBlock;
+    const moon::BasicBlock* outlinedBranch = nullptr;
+    const moon::BasicBlock* outlinedReturn = nullptr;
     const auto matchesReturnedOwnerMaterialization =
         [&](const moon::BasicBlock& block,
             const moon::IdentifierExpr& source) {
@@ -209,6 +230,25 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
                     !block.terminator.primary.cleanups.empty())
                     return std::nullopt;
             } else if (block.terminator.kind ==
+                       moon::TerminatorKind::Branch) {
+                const auto* condition =
+                    dynamic_cast<const moon::IdentifierExpr*>(
+                        block.terminator.operand.get());
+                const auto* conditionLocal = condition
+                    ? graph->findLocal(condition->local) : nullptr;
+                const auto* selectorType = hasSelector
+                    ? program.findType(function.params.back().type) : nullptr;
+                if (!hasSelector || ++outlinedBranchCount != 1 ||
+                    !block.operations.empty() ||
+                    !block.terminator.primary.cleanups.empty() ||
+                    !block.terminator.secondary.cleanups.empty() ||
+                    !condition || !conditionLocal || !selectorType ||
+                    condition->type != selectorType->id ||
+                    conditionLocal->kind != moon::LocalKind::Parameter ||
+                    conditionLocal->type != selectorType->id)
+                    return std::nullopt;
+                outlinedBranch = &block;
+            } else if (block.terminator.kind ==
                        moon::TerminatorKind::Return) {
                 const auto* returned =
                     dynamic_cast<const moon::ResultConstructExpr*>(
@@ -228,6 +268,7 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
                     !matchesReturnedOwnerMaterialization(block, *source) ||
                     ++outlinedReturnCount != 1)
                     return std::nullopt;
+                outlinedReturn = &block;
             } else {
                 return std::nullopt;
             }
@@ -239,7 +280,48 @@ std::optional<PrivateOwnedResultStatusPlan> privateOwnedResultStatusCandidate(
                 return std::nullopt;
         }
     }
-    if (slotCount != 1 || outlinedReturnCount > 1) return std::nullopt;
+    if (slotCount != 1 || outlinedReturnCount > 1 ||
+        outlinedBranchCount != static_cast<size_t>(hasSelector) ||
+        (hasSelector && outlinedReturnCount != 1))
+        return std::nullopt;
+    if (outlinedBranch) {
+        enum class BranchOutcome : uint8_t { ReturnsOwner, Completes };
+        const auto classifyBranchOutcome = [&](moon::BlockId start)
+            -> std::optional<BranchOutcome> {
+            std::unordered_set<uint32_t> visited;
+            auto current = start;
+            for (;;) {
+                const auto* block = graph->findBlock(current);
+                if (!block) return std::nullopt;
+                bool isOutlined = false;
+                for (auto regionId = block->region; !regionId.empty();) {
+                    const auto* region = graph->findRegion(regionId);
+                    if (!region) return std::nullopt;
+                    if (region->kind == moon::RegionKind::Continuation) {
+                        isOutlined = true;
+                        break;
+                    }
+                    regionId = region->parent;
+                }
+                if (!isOutlined) return BranchOutcome::Completes;
+                if (!visited.insert(current.value).second)
+                    return std::nullopt;
+                if (block == outlinedReturn)
+                    return BranchOutcome::ReturnsOwner;
+                if (block->terminator.kind != moon::TerminatorKind::Jump ||
+                    !block->operations.empty() ||
+                    !block->terminator.primary.cleanups.empty())
+                    return std::nullopt;
+                current = block->terminator.primary.target;
+            }
+        };
+        const auto primary = classifyBranchOutcome(
+            outlinedBranch->terminator.primary.target);
+        const auto secondary = classifyBranchOutcome(
+            outlinedBranch->terminator.secondary.target);
+        if (!primary || !secondary || *primary == *secondary)
+            return std::nullopt;
+    }
     if (outlinedReturnCount == 1)
         plan.cleanupPendingReturnByBlock[slotBlock.value] = true;
     size_t derivationCount = 0;
@@ -2326,14 +2408,15 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
         if (executable) {
             std::optional<PrivateOwnedResultStatusPlan> ownedStatusPlan;
-            if (privateErrResourceResultJit && function.params.size() == 1)
+            if (privateErrResourceResultJit &&
+                (function.params.size() == 1 || privateRefApplySelector))
                 ownedStatusPlan = privateOwnedResultStatusCandidate(
                     program, function);
             const bool scalarStatusCandidate = privateScalarResultJit &&
                 function.params.size() == 1 &&
                 privateScalarResultStatusCandidate(program, function);
-            if (function.params.size() == 1 &&
-                (scalarStatusCandidate || ownedStatusPlan)) {
+            if ((function.params.size() == 1 && scalarStatusCandidate) ||
+                ownedStatusPlan) {
                 // The bounded owned Result clone releases proven local
                 // owners and an initialized outlined return value on failure.
                 // A trailing cell separates failure from the Result tag.
@@ -2364,7 +2447,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 proof.mPrivateRefResultPendingReturnType = {};
                 proof.mFunctions[function.generatedSymbolName] = body;
                 if (!proof.mErrors.empty() || statusBody->empty() ||
-                    statusBody->arg_size() != 3) {
+                    statusBody->arg_size() != body->arg_size() + 1) {
                     failure = proof.mErrors.empty()
                         ? "private Ref Result status body lost its source signature"
                         : proof.mErrors.front().message;
@@ -2373,7 +2456,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 size_t derivationFailures = 0;
                 size_t dispatchFailures = 0;
                 size_t statusInitializations = 0;
-                const auto* statusArgument = statusBody->getArg(2);
+                const auto* statusArgument = statusBody->getArg(
+                    statusBody->arg_size() - 1);
                 for (const auto& block : *statusBody) {
                     const bool derivationFailure =
                         block.getName().starts_with("ref.apply.failed");
@@ -2499,10 +2583,12 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     failure = "private Ref Result status graph changed its Slot topology";
                     return false;
                 }
+                std::vector<llvm::Type*> statusProbeParameters(
+                    statusBody->getFunctionType()->params().begin(),
+                    statusBody->getFunctionType()->params().end() - 1);
                 auto* statusProbe = llvm::Function::Create(
                     llvm::FunctionType::get(proof.mHelpers->i32Ty(),
-                        {proof.mHelpers->ptrTy(), proof.mHelpers->ptrTy()},
-                        false),
+                        statusProbeParameters, false),
                     llvm::Function::ExternalLinkage,
                     "__luna_private_ref_result_status_failure_probe_test",
                     *proof.mModule);
@@ -2510,9 +2596,11 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     *proof.mCtx, "entry", statusProbe));
                 auto* statusCell = statusBuilder.CreateAlloca(
                     proof.mHelpers->i32Ty());
-                statusBuilder.CreateCall(statusBody,
-                    {statusProbe->getArg(0), statusProbe->getArg(1),
-                     statusCell});
+                std::vector<llvm::Value*> statusArguments;
+                for (auto& argument : statusProbe->args())
+                    statusArguments.push_back(&argument);
+                statusArguments.push_back(statusCell);
+                statusBuilder.CreateCall(statusBody, statusArguments);
                 statusBuilder.CreateRet(statusBuilder.CreateLoad(
                     proof.mHelpers->i32Ty(), statusCell));
             }
